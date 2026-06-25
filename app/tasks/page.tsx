@@ -6,37 +6,39 @@ import { Profile, Task, TaskStatus, Priority } from '@/lib/types'
 import Sidebar from '@/components/Sidebar'
 import PendingPopup from '@/components/PendingPopup'
 import toast from 'react-hot-toast'
-import { Plus, RefreshCw, Trash2, X, Filter, Bell, Upload, Download, CheckCircle, RotateCcw, Eye, Calendar, Tag, Clock, User, AlignLeft, Flag, Users } from 'lucide-react'
+import { Plus, RefreshCw, Trash2, X, Filter, Bell, Upload, Download, CheckCircle, RotateCcw, Eye, Calendar, Tag, Clock, AlignLeft, Flag, Users, UserPlus, Save } from 'lucide-react'
 
 const STATUS_ORDER: TaskStatus[] = ['pending','in-progress','review','done']
 const STATUS_COLOR: Record<string,string> = { pending:'bg-red-100 text-red-700', 'in-progress':'bg-blue-100 text-blue-700', review:'bg-amber-100 text-amber-700', done:'bg-green-100 text-green-700' }
 const PRI_COLOR: Record<string,string> = { high:'bg-red-100 text-red-700', medium:'bg-amber-100 text-amber-700', low:'bg-green-100 text-green-700' }
 const FREQ_COLOR_MAP: Record<string,string> = { daily:'bg-green-100 text-green-700', weekly:'bg-blue-100 text-blue-700', monthly:'bg-teal-100 text-teal-700', quarterly:'bg-amber-100 text-amber-700', yearly:'bg-rose-100 text-rose-700', once:'bg-gray-100 text-gray-600' }
 const AV = [['bg-purple-100','text-purple-700'],['bg-teal-100','text-teal-700'],['bg-amber-100','text-amber-700'],['bg-blue-100','text-blue-700'],['bg-rose-100','text-rose-700']]
-
 const EMPTY_FORM = { title:'', description:'', assignees:[] as string[], category:'other', priority:'medium' as Priority, frequency:'once', status:'pending' as TaskStatus, due_date:'' }
 
 export default function TasksPage() {
   const router = useRouter()
-  const [profile,     setProfile]     = useState<Profile | null>(null)
-  const [tasks,       setTasks]       = useState<any[]>([])
-  const [members,     setMembers]     = useState<Profile[]>([])
-  const [popup,       setPopup]       = useState(false)
-  const [loading,     setLoading]     = useState(true)
-  const [showForm,    setShowForm]    = useState(false)
-  const [showImport,  setShowImport]  = useState(false)
-  const [importing,   setImporting]   = useState(false)
-  const [form,        setForm]        = useState(EMPTY_FORM)
-  const [saving,      setSaving]      = useState(false)
-  const [fMember,     setFMember]     = useState('')
-  const [fStatus,     setFStatus]     = useState('')
-  const [fFreq,       setFFreq]       = useState('')
-  const [fPri,        setFPri]        = useState('')
-  const [revokeId,    setRevokeId]    = useState<string | null>(null)
-  const [revokeNote,  setRevokeNote]  = useState('')
-  const [viewTask,    setViewTask]    = useState<any | null>(null)
-  const [categories,  setCategories]  = useState<string[]>(['maintenance','review','report','meeting','audit','other'])
-  const [frequencies, setFrequencies] = useState<{key:string,label:string}[]>([
+  const [profile,      setProfile]      = useState<Profile | null>(null)
+  const [tasks,        setTasks]        = useState<any[]>([])
+  const [members,      setMembers]      = useState<Profile[]>([])
+  const [popup,        setPopup]        = useState(false)
+  const [loading,      setLoading]      = useState(true)
+  const [showForm,     setShowForm]     = useState(false)
+  const [showImport,   setShowImport]   = useState(false)
+  const [importing,    setImporting]    = useState(false)
+  const [form,         setForm]         = useState(EMPTY_FORM)
+  const [saving,       setSaving]       = useState(false)
+  const [fMember,      setFMember]      = useState('')
+  const [fStatus,      setFStatus]      = useState('')
+  const [fFreq,        setFFreq]        = useState('')
+  const [fPri,         setFPri]         = useState('')
+  const [revokeId,     setRevokeId]     = useState<string | null>(null)
+  const [revokeNote,   setRevokeNote]   = useState('')
+  const [viewTask,     setViewTask]     = useState<any | null>(null)
+  const [editAssignees,setEditAssignees]= useState(false)
+  const [newAssignees, setNewAssignees] = useState<string[]>([])
+  const [savingAssign, setSavingAssign] = useState(false)
+  const [categories,   setCategories]   = useState<string[]>(['maintenance','review','report','meeting','audit','other'])
+  const [frequencies,  setFrequencies]  = useState<{key:string,label:string}[]>([
     {key:'daily',label:'Daily'},{key:'weekly',label:'Weekly'},{key:'monthly',label:'Monthly'},
     {key:'quarterly',label:'Quarterly'},{key:'yearly',label:'Yearly'},{key:'once',label:'One-time'}
   ])
@@ -71,13 +73,11 @@ export default function TasksPage() {
   const isManager = profile?.role === 'manager' || isAdmin
   const canEdit   = isManager
 
-  // Get member names for a task's assignees array
-  function getAssigneeNames(task: any): Profile[] {
+  function getAssigneeProfiles(task: any): Profile[] {
     const ids: string[] = task.assignees?.length ? task.assignees : task.assigned_to ? [task.assigned_to] : []
     return ids.map(id => members.find(m => m.id === id)).filter(Boolean) as Profile[]
   }
 
-  // Can this user mark task done?
   function canMarkDone(task: any) {
     if (!profile) return false
     if (isManager) return true
@@ -85,13 +85,33 @@ export default function TasksPage() {
     return ids.includes(profile.id)
   }
 
-  function toggleAssignee(memberId: string) {
-    setForm(f => ({
-      ...f,
-      assignees: f.assignees.includes(memberId)
-        ? f.assignees.filter(id => id !== memberId)
-        : [...f.assignees, memberId]
-    }))
+  function toggleAssignee(memberId: string, list: string[], setList: (v:string[])=>void) {
+    setList(list.includes(memberId) ? list.filter(id => id !== memberId) : [...list, memberId])
+  }
+
+  function openEditAssignees(task: any) {
+    const ids: string[] = task.assignees?.length ? task.assignees : task.assigned_to ? [task.assigned_to] : []
+    setNewAssignees(ids)
+    setEditAssignees(true)
+  }
+
+  async function saveAssignees() {
+    if (!viewTask) return
+    if (newAssignees.length === 0) { toast.error('Select at least one member'); return }
+    setSavingAssign(true)
+    const { error } = await supabase.from('tasks').update({
+      assignees:   newAssignees,
+      assigned_to: newAssignees[0],
+    }).eq('id', viewTask.id)
+    if (error) toast.error(error.message)
+    else {
+      toast.success('Assignees updated!')
+      setEditAssignees(false)
+      const updated = { ...viewTask, assignees: newAssignees, assigned_to: newAssignees[0] }
+      setViewTask(updated)
+      if (profile) load(profile.id)
+    }
+    setSavingAssign(false)
   }
 
   async function markDone(task: any) {
@@ -109,11 +129,7 @@ export default function TasksPage() {
     if (!revokeId) return
     const { error } = await supabase.from('tasks').update({ status: 'pending' }).eq('id', revokeId)
     if (error) toast.error(error.message)
-    else {
-      toast.success('Task revoked — sent back to pending')
-      setRevokeId(null); setRevokeNote('')
-      if (profile) load(profile.id)
-    }
+    else { toast.success('Task revoked — sent back to pending'); setRevokeId(null); setRevokeNote(''); if (profile) load(profile.id) }
   }
 
   async function cycleStatus(task: any) {
@@ -132,16 +148,11 @@ export default function TasksPage() {
     if (form.assignees.length === 0) { toast.error('Please select at least one member'); return }
     setSaving(true)
     const { error } = await supabase.from('tasks').insert({
-      title:       form.title,
-      description: form.description,
-      assigned_to: form.assignees[0], // keep for backward compat
-      assignees:   form.assignees,
-      category:    form.category,
-      priority:    form.priority,
-      frequency:   form.frequency,
-      status:      form.status,
-      due_date:    form.due_date || null,
-      created_by:  profile.id,
+      title: form.title, description: form.description,
+      assigned_to: form.assignees[0], assignees: form.assignees,
+      category: form.category, priority: form.priority,
+      frequency: form.frequency, status: form.status,
+      due_date: form.due_date || null, created_by: profile.id,
     })
     if (error) toast.error(error.message)
     else { toast.success('Task assigned!'); setShowForm(false); setForm(EMPTY_FORM); load(profile.id) }
@@ -151,26 +162,20 @@ export default function TasksPage() {
   async function deleteTask(id: string) {
     const { error } = await supabase.from('tasks').delete().eq('id', id)
     if (error) toast.error(error.message)
-    else {
-      toast.success('Task removed')
-      if (viewTask?.id === id) setViewTask(null)
-      if (profile) load(profile.id)
-    }
+    else { toast.success('Task removed'); if (viewTask?.id === id) setViewTask(null); if (profile) load(profile.id) }
   }
 
   function downloadTemplate() {
     const csv = ['title,assigned_to_email,category,priority,frequency,due_date,description',
-      'Server health check,alice@company.com,maintenance,high,daily,2026-07-01,Check all servers daily'].join('\n')
-    const blob = new Blob([csv], { type: 'text/csv' })
+      'Server health check,alice@company.com,maintenance,high,daily,2026-07-01,Check all servers'].join('\n')
+    const blob = new Blob([csv], { type:'text/csv' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a'); a.href=url; a.download='task_import_template.csv'; a.click()
-    URL.revokeObjectURL(url)
-    toast.success('Template downloaded!')
+    URL.revokeObjectURL(url); toast.success('Template downloaded!')
   }
 
   async function handleCSVImport(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (!file || !profile) return
+    const file = e.target.files?.[0]; if (!file || !profile) return
     setImporting(true)
     try {
       const text = await file.text()
@@ -183,27 +188,28 @@ export default function TasksPage() {
       for (let i = 1; i < allLines.length; i++) {
         const line = allLines[i].trim(); if (!line) continue
         const values: string[] = []; let cur='', inQ=false
-        for (const ch of line) {
-          if (ch==='"'){inQ=!inQ} else if(ch===','&&!inQ){values.push(cur.trim());cur=''} else{cur+=ch}
-        }
+        for (const ch of line) { if(ch==='"'){inQ=!inQ}else if(ch===','&&!inQ){values.push(cur.trim());cur=''}else{cur+=ch} }
         values.push(cur.trim())
         const row: Record<string,string> = {}
-        headers.forEach((h,idx)=>{row[h]=(values[idx]||'').replace(/^"|"$/g,'').trim()})
+        headers.forEach((h,idx) => { row[h]=(values[idx]||'').replace(/^"|"$/g,'').trim() })
         if (!row.title) continue
         const rawFreq = (row.frequency||'once').toLowerCase().trim()
         const rawPri  = (row.priority||'medium').toLowerCase().trim()
-        const member  = members.find(m=>m.email.toLowerCase()===(row.assigned_to_email||'').toLowerCase())
+
+        // Support pipe-separated emails: alice@co.com|bob@co.com
+        const emailsRaw = (row.assigned_to_email||'').split('|').map(e=>e.trim().toLowerCase()).filter(Boolean)
+        const assigneeIds = emailsRaw.map(email => members.find(m=>m.email.toLowerCase()===email)?.id).filter(Boolean) as string[]
+
         const { error } = await supabase.from('tasks').insert({
-          title:       row.title,
-          description: row.description||'',
-          assigned_to: member?.id||null,
-          assignees:   member?.id ? [member.id] : [],
-          category:    (row.category||'other').toLowerCase().trim(),
-          priority:    (['high','medium','low'].includes(rawPri)?rawPri:'medium') as Priority,
-          frequency:   freqMap[rawFreq]||frequencies[0]?.key||'once',
-          status:      'pending' as TaskStatus,
-          due_date:    row.due_date||null,
-          created_by:  profile.id,
+          title: row.title, description: row.description||'',
+          assigned_to: assigneeIds[0]||null,
+          assignees: assigneeIds,
+          category: (row.category||'other').toLowerCase().trim(),
+          priority: (['high','medium','low'].includes(rawPri)?rawPri:'medium') as Priority,
+          frequency: freqMap[rawFreq]||frequencies[0]?.key||'once',
+          status: 'pending' as TaskStatus,
+          due_date: row.due_date||null,
+          created_by: profile.id,
         })
         if (error){console.error('Row',i,error.message);failed++}else imported++
       }
@@ -215,10 +221,7 @@ export default function TasksPage() {
 
   const filtered = tasks.filter(t => {
     const ids: string[] = t.assignees?.length ? t.assignees : t.assigned_to ? [t.assigned_to] : []
-    return (!fMember || ids.includes(fMember)) &&
-      (!fStatus || t.status===fStatus) &&
-      (!fFreq   || t.frequency===fFreq) &&
-      (!fPri    || t.priority===fPri)
+    return (!fMember||ids.includes(fMember))&&(!fStatus||t.status===fStatus)&&(!fFreq||t.frequency===fFreq)&&(!fPri||t.priority===fPri)
   })
 
   if (loading || !profile) return (
@@ -236,10 +239,12 @@ export default function TasksPage() {
 
       {/* ── TASK DETAIL POPUP ── */}
       {viewTask && (() => {
-        const assignees = getAssigneeNames(viewTask)
+        const assignees = getAssigneeProfiles(viewTask)
         return (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setViewTask(null)}>
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => { setViewTask(null); setEditAssignees(false) }}>
             <div className="bg-white rounded-2xl w-full max-w-lg shadow-xl overflow-hidden" onClick={e => e.stopPropagation()}>
+
+              {/* Header */}
               <div className="flex items-start justify-between px-6 py-5 border-b border-gray-100">
                 <div className="flex-1 pr-4">
                   <div className="flex items-center gap-2 mb-1 flex-wrap">
@@ -249,11 +254,12 @@ export default function TasksPage() {
                   </div>
                   <h2 className="text-base font-semibold text-gray-900 mt-1">{viewTask.title}</h2>
                 </div>
-                <button onClick={() => setViewTask(null)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400">
-                  <X size={16}/>
-                </button>
+                <button onClick={() => { setViewTask(null); setEditAssignees(false) }} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400"><X size={16}/></button>
               </div>
-              <div className="px-6 py-5 space-y-4">
+
+              <div className="px-6 py-5 space-y-4 max-h-[60vh] overflow-y-auto">
+
+                {/* Description */}
                 <div className="flex gap-3">
                   <AlignLeft size={16} className="text-gray-400 mt-0.5 flex-shrink-0"/>
                   <div>
@@ -264,30 +270,74 @@ export default function TasksPage() {
                   </div>
                 </div>
 
-                {/* Assignees */}
+                {/* Assignees section */}
                 <div className="flex gap-3">
                   <Users size={16} className="text-gray-400 mt-0.5 flex-shrink-0"/>
                   <div className="flex-1">
-                    <p className="text-xs font-medium text-gray-400 mb-2">Assigned to ({assignees.length})</p>
-                    <div className="flex flex-wrap gap-2">
-                      {assignees.length === 0
-                        ? <span className="text-sm text-gray-400">Unassigned</span>
-                        : assignees.map((m, i) => {
-                            const [bg, fc] = AV[i % AV.length]
-                            return (
-                              <div key={m.id} className={`flex items-center gap-2 px-3 py-1.5 rounded-full ${bg}`}>
-                                <div className={`w-5 h-5 rounded-full ${bg} ${fc} border border-white flex items-center justify-center text-xs font-semibold`}>
-                                  {m.full_name.slice(0,2).toUpperCase()}
-                                </div>
-                                <span className={`text-xs font-medium ${fc}`}>{m.full_name}</span>
-                              </div>
-                            )
-                          })
-                      }
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-xs font-medium text-gray-400">Assigned to ({assignees.length})</p>
+                      {canEdit && !editAssignees && (
+                        <button onClick={() => openEditAssignees(viewTask)}
+                          className="flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 font-medium">
+                          <UserPlus size={12}/> Edit assignees
+                        </button>
+                      )}
+                      {canEdit && editAssignees && (
+                        <button onClick={() => setEditAssignees(false)} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
+                      )}
                     </div>
+
+                    {/* Edit assignees mode */}
+                    {editAssignees && canEdit ? (
+                      <div>
+                        <p className="text-xs text-gray-400 mb-2">Click to add or remove assignees. Any selected member can close this task.</p>
+                        <div className="flex flex-wrap gap-2 p-3 border border-indigo-200 rounded-lg bg-indigo-50/30 mb-3">
+                          {members.map((m, i) => {
+                            const [bg, fc] = AV[i % AV.length]
+                            const selected = newAssignees.includes(m.id)
+                            return (
+                              <button key={m.id} type="button"
+                                onClick={() => toggleAssignee(m.id, newAssignees, setNewAssignees)}
+                                className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
+                                  selected ? `${bg} ${fc} border-current shadow-sm` : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300'
+                                }`}>
+                                <span>{m.full_name.split(' ')[0]}</span>
+                                {selected && <span className="text-green-500">✓</span>}
+                              </button>
+                            )
+                          })}
+                        </div>
+                        {newAssignees.length > 0 && (
+                          <p className="text-xs text-indigo-600 mb-2">{newAssignees.length} member{newAssignees.length>1?'s':''} selected — any of them can mark this task done</p>
+                        )}
+                        <button onClick={saveAssignees} disabled={savingAssign}
+                          className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-xs font-medium hover:bg-indigo-700">
+                          {savingAssign ? <span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"/> : <Save size={12}/>}
+                          Save assignees
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex flex-wrap gap-2">
+                        {assignees.length === 0
+                          ? <span className="text-sm text-gray-400">Unassigned</span>
+                          : assignees.map((m, i) => {
+                              const [bg, fc] = AV[i % AV.length]
+                              return (
+                                <div key={m.id} className={`flex items-center gap-2 px-3 py-1.5 rounded-full ${bg}`}>
+                                  <div className={`w-5 h-5 rounded-full flex items-center justify-center text-xs font-semibold ${fc}`}>
+                                    {m.full_name.slice(0,2).toUpperCase()}
+                                  </div>
+                                  <span className={`text-xs font-medium ${fc}`}>{m.full_name}</span>
+                                </div>
+                              )
+                            })
+                        }
+                      </div>
+                    )}
                   </div>
                 </div>
 
+                {/* Details grid */}
                 <div className="grid grid-cols-2 gap-4 bg-gray-50 rounded-xl p-4">
                   <div className="flex gap-2 items-start">
                     <Tag size={14} className="text-gray-400 mt-0.5 flex-shrink-0"/>
@@ -312,12 +362,14 @@ export default function TasksPage() {
                   </div>
                 </div>
 
-                {assignees.length > 1 && (
-                  <div className="bg-indigo-50 rounded-lg px-4 py-2.5 text-xs text-indigo-700">
-                    <strong>Any</strong> of the {assignees.length} assigned members can mark this task as done.
+                {assignees.length > 1 && !editAssignees && (
+                  <div className="bg-green-50 rounded-lg px-4 py-2.5 text-xs text-green-700">
+                    ✅ Any of the <strong>{assignees.length} assigned members</strong> can mark this task as done.
                   </div>
                 )}
               </div>
+
+              {/* Footer */}
               <div className="px-6 py-4 border-t border-gray-100 flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex gap-2 flex-wrap">
                   {canMarkDone(viewTask) && viewTask.status !== 'done' && (
@@ -342,7 +394,7 @@ export default function TasksPage() {
                       <Trash2 size={13}/> Delete
                     </button>
                   )}
-                  <button onClick={() => setViewTask(null)} className="btn-secondary text-xs py-1.5">Close</button>
+                  <button onClick={() => { setViewTask(null); setEditAssignees(false) }} className="btn-secondary text-xs py-1.5">Close</button>
                 </div>
               </div>
             </div>
@@ -356,14 +408,9 @@ export default function TasksPage() {
           <div className="bg-white rounded-2xl w-full max-w-md shadow-xl p-6" onClick={e => e.stopPropagation()}>
             <div className="flex items-center gap-3 mb-4">
               <div className="w-10 h-10 bg-amber-100 rounded-full flex items-center justify-center"><RotateCcw size={18} className="text-amber-600"/></div>
-              <div>
-                <h3 className="font-semibold text-gray-900 text-sm">Revoke completed task?</h3>
-                <p className="text-xs text-gray-400 mt-0.5">Sends task back to <strong>pending</strong></p>
-              </div>
+              <div><h3 className="font-semibold text-gray-900 text-sm">Revoke completed task?</h3><p className="text-xs text-gray-400">Sends back to <strong>pending</strong></p></div>
             </div>
-            <div className="bg-gray-50 rounded-lg px-4 py-3 mb-4">
-              <p className="text-sm font-medium text-gray-800">{revokeTask.title}</p>
-            </div>
+            <div className="bg-gray-50 rounded-lg px-4 py-3 mb-4"><p className="text-sm font-medium text-gray-800">{revokeTask.title}</p></div>
             <div className="mb-4">
               <label className="block text-xs font-medium text-gray-500 mb-1">Reason (optional)</label>
               <textarea className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none h-16"
@@ -381,7 +428,6 @@ export default function TasksPage() {
 
       <main className="flex-1 p-6 overflow-auto">
         <div className="max-w-6xl mx-auto">
-
           <div className="flex items-center justify-between mb-5">
             <div>
               <h1 className="text-xl font-semibold text-gray-900">Task board</h1>
@@ -409,7 +455,7 @@ export default function TasksPage() {
 
           {!canEdit && (
             <div className="bg-indigo-50 border border-indigo-100 rounded-lg px-4 py-3 mb-5 text-xs text-indigo-700">
-              ✅ Click any task to view details. Use the green tick to mark your tasks as done.
+              ✅ Click any task to view details and mark your assigned tasks as done.
             </div>
           )}
 
@@ -417,7 +463,17 @@ export default function TasksPage() {
           {showImport && canEdit && (
             <div className="card p-5 mb-5">
               <h3 className="text-sm font-semibold text-gray-700 mb-1">Import tasks from CSV</h3>
-              <p className="text-xs text-gray-400 mb-3">One assignee per row via email. Category and frequency matched automatically.</p>
+              <p className="text-xs text-gray-400 mb-2">Use <strong>assigned_to_email</strong> column. For multiple assignees use pipe: <code className="bg-gray-100 px-1 rounded">alice@co.com|bob@co.com</code></p>
+              <div className="grid grid-cols-2 gap-3 mb-4 text-xs">
+                <div className="bg-gray-50 rounded-lg p-3">
+                  <p className="font-medium text-gray-600 mb-1.5">Valid categories:</p>
+                  <div className="flex flex-wrap gap-1">{categories.map(c=><span key={c} className="bg-white border border-gray-200 px-2 py-0.5 rounded-full capitalize">{c}</span>)}</div>
+                </div>
+                <div className="bg-gray-50 rounded-lg p-3">
+                  <p className="font-medium text-gray-600 mb-1.5">Valid frequencies:</p>
+                  <div className="flex flex-wrap gap-1">{frequencies.map(f=><span key={f.key} className="bg-white border border-gray-200 px-2 py-0.5 rounded-full">{f.key}</span>)}</div>
+                </div>
+              </div>
               <div className="flex gap-3 flex-wrap">
                 <button onClick={downloadTemplate} className="btn-secondary"><Download size={14}/> Download template</button>
                 <label className={`btn-primary cursor-pointer ${importing?'opacity-50 cursor-not-allowed':''}`}>
@@ -437,40 +493,33 @@ export default function TasksPage() {
                   <label className="block text-xs font-medium text-gray-500 mb-1">Task title *</label>
                   <input className="input" placeholder="Enter task name" value={form.title} onChange={e=>setForm({...form,title:e.target.value})}/>
                 </div>
-
-                {/* Multi-member selector */}
                 <div className="col-span-2">
                   <label className="block text-xs font-medium text-gray-500 mb-2">
-                    Assign to * <span className="text-gray-400 font-normal">(select one or more — any can close the task)</span>
+                    Assign to * <span className="text-gray-400 font-normal">— select one or more (any can close the task)</span>
                   </label>
                   <div className="flex flex-wrap gap-2 p-3 border border-gray-200 rounded-lg bg-gray-50 min-h-[48px]">
                     {members.map((m, i) => {
                       const [bg, fc] = AV[i % AV.length]
                       const selected = form.assignees.includes(m.id)
                       return (
-                        <button key={m.id} type="button" onClick={() => toggleAssignee(m.id)}
+                        <button key={m.id} type="button"
+                          onClick={() => toggleAssignee(m.id, form.assignees, (v) => setForm({...form, assignees: v}))}
                           className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
-                            selected ? `${bg} ${fc} border-current shadow-sm scale-105` : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300'
+                            selected ? `${bg} ${fc} border-current shadow-sm` : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300'
                           }`}>
-                          <div className={`w-4 h-4 rounded-full flex items-center justify-center text-xs font-bold ${selected?fc:'text-gray-400'}`}>
-                            {m.full_name.slice(0,1).toUpperCase()}
-                          </div>
                           {m.full_name.split(' ')[0]}
-                          {selected && <span className="ml-0.5">✓</span>}
+                          {selected && <span className="text-green-500">✓</span>}
                         </button>
                       )
                     })}
-                    {members.length === 0 && <span className="text-xs text-gray-400">No members yet — add members in Team tab first</span>}
+                    {members.length === 0 && <span className="text-xs text-gray-400">No members — add in Team tab first</span>}
                   </div>
-                  {form.assignees.length > 0 && (
-                    <p className="text-xs text-indigo-600 mt-1">{form.assignees.length} member{form.assignees.length>1?'s':''} selected — any of them can mark this task done</p>
-                  )}
+                  {form.assignees.length > 0 && <p className="text-xs text-indigo-600 mt-1">{form.assignees.length} selected</p>}
                 </div>
-
                 <div>
                   <label className="block text-xs font-medium text-gray-500 mb-1">Category</label>
                   <select className="input" value={form.category} onChange={e=>setForm({...form,category:e.target.value})}>
-                    {categories.map(c=><option key={c} value={c} className="capitalize">{c}</option>)}
+                    {categories.map(c=><option key={c} value={c}>{c}</option>)}
                   </select>
                 </div>
                 <div>
@@ -527,9 +576,7 @@ export default function TasksPage() {
               {['high','medium','low'].map(p=><option key={p} value={p}>{p}</option>)}
             </select>
             {(fMember||fStatus||fFreq||fPri)&&(
-              <button className="btn-secondary py-1 text-xs" onClick={()=>{setFMember('');setFStatus('');setFFreq('');setFPri('')}}>
-                <X size={12}/> Clear
-              </button>
+              <button className="btn-secondary py-1 text-xs" onClick={()=>{setFMember('');setFStatus('');setFFreq('');setFPri('')}}><X size={12}/> Clear</button>
             )}
           </div>
 
@@ -548,67 +595,67 @@ export default function TasksPage() {
                   {filtered.length === 0
                     ? <tr><td colSpan={8} className="text-center text-gray-400 text-sm py-12">No tasks found</td></tr>
                     : filtered.map(t => {
-                      const assignees = getAssigneeNames(t)
-                      const isDone = t.status === 'done'
-                      const freqLabel = frequencies.find(f=>f.key===t.frequency)?.label||t.frequency
-                      const freqColor = FREQ_COLOR_MAP[t.frequency]||'bg-purple-100 text-purple-700'
-                      return (
-                        <tr key={t.id} onClick={() => setViewTask(t)}
-                          className={`border-b border-gray-50 cursor-pointer transition-colors ${isDone?'opacity-60 bg-gray-50/40 hover:bg-gray-100/60':'hover:bg-indigo-50/40'}`}>
-                          <td className="px-4 py-3 max-w-[180px]">
-                            <p className={`font-medium text-gray-800 truncate ${isDone?'line-through text-gray-400':''}`}>{t.title}</p>
-                          </td>
-                          <td className="px-4 py-3">
-                            <div className="flex items-center">
-                              {assignees.slice(0,3).map((m,i) => {
-                                const [bg,fc] = AV[i%AV.length]
-                                return (
-                                  <div key={m.id} title={m.full_name}
-                                    className={`w-6 h-6 rounded-full ${bg} ${fc} flex items-center justify-center text-xs font-semibold border-2 border-white ${i>0?'-ml-1.5':''}`}>
-                                    {m.full_name.slice(0,2).toUpperCase()}
-                                  </div>
-                                )
-                              })}
-                              {assignees.length > 3 && <span className="text-xs text-gray-400 ml-1">+{assignees.length-3}</span>}
-                              {assignees.length === 0 && <span className="text-xs text-gray-400">Unassigned</span>}
-                            </div>
-                          </td>
-                          <td className="px-4 py-3"><span className="badge bg-gray-100 text-gray-600 text-xs capitalize">{t.category}</span></td>
-                          <td className="px-4 py-3"><span className={`badge text-xs ${freqColor}`}>{freqLabel}</span></td>
-                          <td className="px-4 py-3"><span className={`badge text-xs ${PRI_COLOR[t.priority]}`}>{t.priority}</span></td>
-                          <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{t.due_date||'–'}</td>
-                          <td className="px-4 py-3"><span className={`badge text-xs ${STATUS_COLOR[t.status]}`}>{t.status}</span></td>
-                          <td className="px-4 py-3" onClick={e=>e.stopPropagation()}>
-                            <div className="flex gap-1">
-                              {canMarkDone(t) && !isDone && (
-                                <button onClick={()=>markDone(t)} title="Mark done"
-                                  className="p-1.5 rounded-lg text-gray-400 hover:bg-green-50 hover:text-green-600 transition-colors">
-                                  <CheckCircle size={13}/>
-                                </button>
-                              )}
-                              {canEdit && !isDone && (
-                                <button onClick={()=>cycleStatus(t)} title="Cycle status"
-                                  className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-indigo-600 transition-colors">
-                                  <RefreshCw size={13}/>
-                                </button>
-                              )}
-                              {canEdit && isDone && (
-                                <button onClick={()=>setRevokeId(t.id)} title="Revoke"
-                                  className="p-1.5 rounded-lg text-amber-400 hover:bg-amber-50 hover:text-amber-600 transition-colors">
-                                  <RotateCcw size={13}/>
-                                </button>
-                              )}
-                              {isAdmin && (
-                                <button onClick={()=>deleteTask(t.id)} title="Delete"
-                                  className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-600 transition-colors">
-                                  <Trash2 size={13}/>
-                                </button>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      )
-                    })
+                        const assignees = getAssigneeProfiles(t)
+                        const isDone    = t.status === 'done'
+                        const freqLabel = frequencies.find(f=>f.key===t.frequency)?.label||t.frequency
+                        const freqColor = FREQ_COLOR_MAP[t.frequency]||'bg-purple-100 text-purple-700'
+                        return (
+                          <tr key={t.id} onClick={() => { setViewTask(t); setEditAssignees(false) }}
+                            className={`border-b border-gray-50 cursor-pointer transition-colors ${isDone?'opacity-60 bg-gray-50/40 hover:bg-gray-100/60':'hover:bg-indigo-50/40'}`}>
+                            <td className="px-4 py-3 max-w-[180px]">
+                              <p className={`font-medium text-gray-800 truncate ${isDone?'line-through text-gray-400':''}`}>{t.title}</p>
+                            </td>
+                            <td className="px-4 py-3">
+                              <div className="flex items-center">
+                                {assignees.slice(0,3).map((m,i) => {
+                                  const [bg,fc]=AV[i%AV.length]
+                                  return (
+                                    <div key={m.id} title={m.full_name}
+                                      className={`w-6 h-6 rounded-full ${bg} ${fc} flex items-center justify-center text-xs font-semibold border-2 border-white ${i>0?'-ml-1.5':''}`}>
+                                      {m.full_name.slice(0,2).toUpperCase()}
+                                    </div>
+                                  )
+                                })}
+                                {assignees.length>3&&<span className="text-xs text-gray-400 ml-1">+{assignees.length-3}</span>}
+                                {assignees.length===0&&<span className="text-xs text-gray-400">—</span>}
+                              </div>
+                            </td>
+                            <td className="px-4 py-3"><span className="badge bg-gray-100 text-gray-600 text-xs capitalize">{t.category}</span></td>
+                            <td className="px-4 py-3"><span className={`badge text-xs ${freqColor}`}>{freqLabel}</span></td>
+                            <td className="px-4 py-3"><span className={`badge text-xs ${PRI_COLOR[t.priority]}`}>{t.priority}</span></td>
+                            <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{t.due_date||'–'}</td>
+                            <td className="px-4 py-3"><span className={`badge text-xs ${STATUS_COLOR[t.status]}`}>{t.status}</span></td>
+                            <td className="px-4 py-3" onClick={e=>e.stopPropagation()}>
+                              <div className="flex gap-1">
+                                {canMarkDone(t)&&!isDone&&(
+                                  <button onClick={()=>markDone(t)} title="Mark done"
+                                    className="p-1.5 rounded-lg text-gray-400 hover:bg-green-50 hover:text-green-600 transition-colors">
+                                    <CheckCircle size={13}/>
+                                  </button>
+                                )}
+                                {canEdit&&!isDone&&(
+                                  <button onClick={()=>cycleStatus(t)} title="Cycle status"
+                                    className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-indigo-600 transition-colors">
+                                    <RefreshCw size={13}/>
+                                  </button>
+                                )}
+                                {canEdit&&isDone&&(
+                                  <button onClick={()=>setRevokeId(t.id)} title="Revoke"
+                                    className="p-1.5 rounded-lg text-amber-400 hover:bg-amber-50 hover:text-amber-600 transition-colors">
+                                    <RotateCcw size={13}/>
+                                  </button>
+                                )}
+                                {isAdmin&&(
+                                  <button onClick={()=>deleteTask(t.id)} title="Delete"
+                                    className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-600 transition-colors">
+                                    <Trash2 size={13}/>
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        )
+                      })
                   }
                 </tbody>
               </table>
