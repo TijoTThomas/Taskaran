@@ -25,7 +25,7 @@ export default function DashboardPage() {
   const load = useCallback(async (uid: string) => {
     const [{ data: p }, { data: t }, { data: m }] = await Promise.all([
       supabase.from('profiles').select('*').eq('id', uid).single(),
-      supabase.from('tasks').select('*, profiles!tasks_assigned_to_fkey(full_name)').order('created_at', { ascending: false }),
+      supabase.from('tasks').select('*').order('created_at', { ascending: false }),
       supabase.from('profiles').select('*').order('full_name'),
     ])
     if (p) setProfile(p)
@@ -110,7 +110,7 @@ export default function DashboardPage() {
               <div className="space-y-3">
                 {members.map((m, i) => {
                   const [bg, fc] = AV[i % AV.length]
-                  const mt = tasks.filter(t => t.assigned_to === m.id)
+                  const mt = tasks.filter(t => (t.assignees?.length ? t.assignees : t.assigned_to ? [t.assigned_to] : []).includes(m.id))
                   const mp = mt.filter(t => t.status !== 'done').length
                   const pct = mt.length ? Math.round(mp / mt.length * 100) : 0
                   return (
