@@ -1,12 +1,12 @@
 'use client'
-import { Profile, Task } from '@/lib/types'
+import { Profile } from '@/lib/types'
 import { X, AlertCircle, ArrowRight } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 
 interface Props {
   open: boolean
   onClose: () => void
-  tasks: Task[]
+  tasks: any[]
   members: Profile[]
 }
 
@@ -22,15 +22,26 @@ export default function PendingPopup({ open, onClose, tasks, members }: Props) {
   const router = useRouter()
   if (!open) return null
 
+  // A task is pending if status !== done
   const pending  = tasks.filter(t => t.status !== 'done')
   const overdue  = tasks.filter(t => t.status !== 'done' && t.due_date && new Date(t.due_date) < new Date())
   const done     = tasks.filter(t => t.status === 'done')
 
-  function memberPending(memberId: string) {
-    return pending.filter(t => t.assigned_to === memberId)
+  // Get all assignee ids for a task (supports both assignees array and legacy assigned_to)
+  function getAssigneeIds(task: any): string[] {
+    if (task.assignees && task.assignees.length > 0) return task.assignees
+    if (task.assigned_to) return [task.assigned_to]
+    return []
   }
+
+  // Pending tasks for a specific member
+  function memberPending(memberId: string) {
+    return pending.filter(t => getAssigneeIds(t).includes(memberId))
+  }
+
+  // Overdue tasks for a specific member
   function memberOverdue(memberId: string) {
-    return overdue.filter(t => t.assigned_to === memberId)
+    return overdue.filter(t => getAssigneeIds(t).includes(memberId))
   }
 
   function countClass(n: number) {
@@ -74,17 +85,17 @@ export default function PendingPopup({ open, onClose, tasks, members }: Props) {
           <p className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-3">Member-wise pending</p>
           {members.map((m, i) => {
             const [bg, fc] = AV_COLORS[i % AV_COLORS.length]
-            const mp = memberPending(m.id)
-            const mo = memberOverdue(m.id)
-            const total = tasks.filter(t => t.assigned_to === m.id).length
-            const pct = total ? Math.round(mp.length / total * 100) : 0
+            const mp    = memberPending(m.id)
+            const mo    = memberOverdue(m.id)
+            const total = tasks.filter(t => getAssigneeIds(t).includes(m.id)).length
+            const pct   = total ? Math.round(mp.length / total * 100) : 0
             return (
               <div key={m.id} className="flex items-center gap-3 py-2.5 border-b border-gray-50 last:border-0">
                 <div className={`w-9 h-9 rounded-full ${bg} ${fc} flex items-center justify-center text-xs font-semibold flex-shrink-0`}>
                   {m.full_name.slice(0,2).toUpperCase()}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
+                  <div className="flex items-center gap-2 mb-1 flex-wrap">
                     <span className="text-sm font-medium text-gray-900">{m.full_name}</span>
                     <span className="badge bg-gray-100 text-gray-500 capitalize text-xs">{m.role}</span>
                     {mo.length > 0 && (
@@ -102,6 +113,9 @@ export default function PendingPopup({ open, onClose, tasks, members }: Props) {
               </div>
             )
           })}
+          {members.length === 0 && (
+            <p className="text-center text-gray-400 text-sm py-4">No team members yet</p>
+          )}
         </div>
 
         {/* Footer */}
