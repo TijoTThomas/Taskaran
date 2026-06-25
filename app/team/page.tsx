@@ -72,7 +72,7 @@ export default function TeamPage() {
           <div className="flex items-center justify-between mb-6">
             <div>
               <h1 className="text-xl font-semibold text-gray-900">Team</h1>
-              <p className="text-sm text-gray-400">{members.length} members across {[...new Set(members.map(m=>m.department).filter(Boolean))].length} departments</p>
+              <p className="text-sm text-gray-400">{members.length} members</p>
             </div>
             {(profile.role === 'admin' || profile.role === 'manager') && pending.length > 0 && (
               <button onClick={() => setPopup(true)}
