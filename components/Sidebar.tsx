@@ -3,23 +3,21 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { Profile } from '@/lib/types'
-import {
-  LayoutDashboard, ClipboardList, Users, Calendar,
-  LogOut, CheckSquare, Bell
-} from 'lucide-react'
-
-const NAV = [
-  { href: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
-  { href: '/tasks',     icon: ClipboardList,   label: 'Tasks' },
-  { href: '/team',      icon: Users,            label: 'Team' },
-  { href: '/schedule',  icon: Calendar,         label: 'Schedule' },
-]
+import { LayoutDashboard, ClipboardList, Users, Calendar, LogOut, CheckSquare, Bell, Settings } from 'lucide-react'
 
 interface Props { profile: Profile; pendingCount: number; onBellClick: () => void }
 
 export default function Sidebar({ profile, pendingCount, onBellClick }: Props) {
   const path   = usePathname()
   const router = useRouter()
+
+  const NAV = [
+    { href: '/dashboard', icon: LayoutDashboard, label: 'Dashboard', roles: ['admin','manager','member'] },
+    { href: '/tasks',     icon: ClipboardList,   label: 'Tasks',     roles: ['admin','manager','member'] },
+    { href: '/team',      icon: Users,            label: 'Team',      roles: ['admin','manager','member'] },
+    { href: '/schedule',  icon: Calendar,         label: 'Schedule',  roles: ['admin','manager','member'] },
+    { href: '/settings',  icon: Settings,         label: 'Settings',  roles: ['admin'] },
+  ]
 
   async function signOut() {
     await supabase.auth.signOut()
@@ -41,7 +39,7 @@ export default function Sidebar({ profile, pendingCount, onBellClick }: Props) {
         </div>
       </div>
 
-      {/* Pending alert bell (admin+manager only) */}
+      {/* Pending alert bell */}
       {canSeeAlert && pendingCount > 0 && (
         <button onClick={onBellClick}
           className="mx-3 mt-4 flex items-center gap-3 px-3 py-2.5 rounded-lg bg-red-50 border border-red-100 text-red-700 hover:bg-red-100 transition-colors text-sm font-medium">
@@ -53,10 +51,10 @@ export default function Sidebar({ profile, pendingCount, onBellClick }: Props) {
         </button>
       )}
 
-      {/* Nav links */}
+      {/* Nav */}
       <nav className="flex-1 px-3 py-4 space-y-0.5">
-        {NAV.map(({ href, icon: Icon, label }) => {
-          const active = path === href || path.startsWith(href + '/')
+        {NAV.filter(n => n.roles.includes(profile.role)).map(({ href, icon: Icon, label }) => {
+          const active = path === href
           return (
             <Link key={href} href={href}
               className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors ${
@@ -69,7 +67,7 @@ export default function Sidebar({ profile, pendingCount, onBellClick }: Props) {
         })}
       </nav>
 
-      {/* User profile + logout */}
+      {/* User + logout */}
       <div className="px-3 pb-4 border-t border-gray-100 pt-3">
         <div className="flex items-center gap-3 px-2 py-2 mb-1">
           <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-xs font-semibold flex-shrink-0">
