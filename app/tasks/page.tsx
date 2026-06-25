@@ -6,7 +6,7 @@ import { Profile, Task, TaskStatus, Priority, Frequency, Category } from '@/lib/
 import Sidebar from '@/components/Sidebar'
 import PendingPopup from '@/components/PendingPopup'
 import toast from 'react-hot-toast'
-import { Plus, RefreshCw, Trash2, X, Filter, Bell, Upload, Download } from 'lucide-react'
+import { Plus, RefreshCw, Trash2, X, Filter, Bell, Upload, Download, CheckCircle, RotateCcw } from 'lucide-react'
 
 const FREQ_LABEL: Record<string,string> = { daily:'Daily', weekly:'Weekly', monthly:'Monthly', quarterly:'Quarterly', yearly:'Yearly', once:'One-time' }
 const STATUS_ORDER: TaskStatus[] = ['pending','in-progress','review','done']
@@ -19,20 +19,22 @@ const EMPTY_FORM = { title:'', description:'', assigned_to:'', category:'other' 
 
 export default function TasksPage() {
   const router = useRouter()
-  const [profile, setProfile]   = useState<Profile | null>(null)
-  const [tasks,   setTasks]     = useState<Task[]>([])
-  const [members, setMembers]   = useState<Profile[]>([])
-  const [popup,   setPopup]     = useState(false)
-  const [loading, setLoading]   = useState(true)
-  const [showForm, setShowForm] = useState(false)
+  const [profile, setProfile]       = useState<Profile | null>(null)
+  const [tasks,   setTasks]         = useState<Task[]>([])
+  const [members, setMembers]       = useState<Profile[]>([])
+  const [popup,   setPopup]         = useState(false)
+  const [loading, setLoading]       = useState(true)
+  const [showForm, setShowForm]     = useState(false)
   const [showImport, setShowImport] = useState(false)
   const [importing, setImporting]   = useState(false)
-  const [form, setForm]         = useState(EMPTY_FORM)
-  const [saving, setSaving]     = useState(false)
-  const [fMember, setFMember]   = useState('')
-  const [fStatus, setFStatus]   = useState('')
-  const [fFreq,   setFFreq]     = useState('')
-  const [fPri,    setFPri]      = useState('')
+  const [form, setForm]             = useState(EMPTY_FORM)
+  const [saving, setSaving]         = useState(false)
+  const [fMember, setFMember]       = useState('')
+  const [fStatus, setFStatus]       = useState('')
+  const [fFreq,   setFFreq]         = useState('')
+  const [fPri,    setFPri]          = useState('')
+  const [revokeId, setRevokeId]     = useState<string | null>(null)
+  const [revokeNote, setRevokeNote] = useState('')
 
   const load = useCallback(async (uid: string) => {
     const [{ data: p }, { data: t }, { data: m }] = await Promise.all([
@@ -53,7 +55,44 @@ export default function TasksPage() {
     })
   }, [router, load])
 
-  const canEdit = profile?.role === 'admin' || profile?.role === 'manager'
+  const isAdmin   = profile?.role === 'admin'
+  const isManager = profile?.role === 'manager' || isAdmin
+  const canEdit   = isManager
+
+  function canMarkDone(task: Task) {
+    if (!profile) return false
+    if (isManager) return true
+    return task.assigned_to === profile.id
+  }
+
+  async function markDone(task: Task) {
+    const next: TaskStatus = task.status === 'done' ? 'in-progress' : 'done'
+    const { error } = await supabase.from('tasks').update({ status: next }).eq('id', task.id)
+    if (error) toast.error(error.message)
+    else {
+      toast.success(next === 'done' ? '✅ Task marked as done!' : '↩️ Task reopened')
+      if (profile) load(profile.id)
+    }
+  }
+
+  async function confirmRevoke() {
+    if (!revokeId) return
+    const { error } = await supabase.from('tasks').update({ status: 'pending' }).eq('id', revokeId)
+    if (error) toast.error(error.message)
+    else {
+      toast.success('Task revoked — sent back to pending')
+      setRevokeId(null)
+      setRevokeNote('')
+      if (profile) load(profile.id)
+    }
+  }
+
+  async function cycleStatus(task: Task) {
+    const next = STATUS_ORDER[(STATUS_ORDER.indexOf(task.status) + 1) % STATUS_ORDER.length]
+    const { error } = await supabase.from('tasks').update({ status: next }).eq('id', task.id)
+    if (error) toast.error(error.message)
+    else { toast.success(`→ ${next}`); if (profile) load(profile.id) }
+  }
 
   async function saveTask() {
     if (!form.title || !form.assigned_to || !profile) return
@@ -64,24 +103,14 @@ export default function TasksPage() {
     setSaving(false)
   }
 
-  async function cycleStatus(task: Task) {
-    const next = STATUS_ORDER[(STATUS_ORDER.indexOf(task.status) + 1) % STATUS_ORDER.length]
-    const { error } = await supabase.from('tasks').update({ status: next }).eq('id', task.id)
-    if (error) toast.error(error.message)
-    else { toast.success(`→ ${next}`); if(profile) load(profile.id) }
-  }
-
   async function deleteTask(id: string) {
     const { error } = await supabase.from('tasks').delete().eq('id', id)
     if (error) toast.error(error.message)
-    else { toast.success('Task removed'); if(profile) load(profile.id) }
+    else { toast.success('Task removed'); if (profile) load(profile.id) }
   }
 
   function downloadTemplate() {
-    const csv = `title,assigned_to_email,category,priority,frequency,due_date,description
-Server health check,alice@company.com,maintenance,high,daily,2026-07-01,Check all servers daily
-Monthly report,bob@company.com,report,medium,monthly,2026-07-31,Compile monthly sales data
-Weekly review,carol@company.com,review,medium,weekly,2026-07-07,Review team progress`
+    const csv = `title,assigned_to_email,category,priority,frequency,due_date,description\nServer health check,alice@company.com,maintenance,high,daily,2026-07-01,Check all servers daily\nMonthly report,bob@company.com,report,medium,monthly,2026-07-31,Compile monthly sales data\nWeekly review,carol@company.com,review,medium,weekly,2026-07-07,Review team progress`
     const blob = new Blob([csv], { type: 'text/csv' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -96,22 +125,15 @@ Weekly review,carol@company.com,review,medium,weekly,2026-07-07,Review team prog
     const file = e.target.files?.[0]
     if (!file || !profile) return
     setImporting(true)
-
     const text = await file.text()
     const lines = text.trim().split('\n')
-    const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/\s+/g,'_'))
-
-    let imported = 0
-    let failed = 0
-
+    const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/\s+/g, '_'))
+    let imported = 0, failed = 0
     for (let i = 1; i < lines.length; i++) {
-      const values = lines[i].split(',').map(v => v.trim().replace(/^"|"$/g,''))
+      const values = lines[i].split(',').map(v => v.trim().replace(/^"|"$/g, ''))
       const row: any = {}
       headers.forEach((h, idx) => { row[h] = values[idx] || '' })
-
-      // find member by email
-      const member = members.find(m => m.email.toLowerCase() === (row.assigned_to_email||'').toLowerCase())
-
+      const member = members.find(m => m.email.toLowerCase() === (row.assigned_to_email || '').toLowerCase())
       const task = {
         title:       row.title || `Task ${i}`,
         description: row.description || '',
@@ -123,12 +145,9 @@ Weekly review,carol@company.com,review,medium,weekly,2026-07-07,Review team prog
         due_date:    row.due_date || null,
         created_by:  profile.id,
       }
-
       const { error } = await supabase.from('tasks').insert(task)
-      if (error) failed++
-      else imported++
+      if (error) failed++; else imported++
     }
-
     toast.success(`Imported ${imported} tasks${failed > 0 ? `, ${failed} failed` : ''}`)
     setImporting(false)
     setShowImport(false)
@@ -150,10 +169,49 @@ Weekly review,carol@company.com,review,medium,weekly,2026-07-07,Review team prog
   )
 
   const pending = tasks.filter(t => t.status !== 'done')
+  const revokeTask = tasks.find(t => t.id === revokeId)
 
   return (
     <div className="flex min-h-screen bg-gray-50">
       <Sidebar profile={profile} pendingCount={pending.length} onBellClick={() => setPopup(true)} />
+
+      {/* REVOKE CONFIRMATION POPUP */}
+      {revokeId && revokeTask && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setRevokeId(null)}>
+          <div className="bg-white rounded-2xl w-full max-w-md shadow-xl p-6" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 bg-amber-100 rounded-full flex items-center justify-center flex-shrink-0">
+                <RotateCcw size={18} className="text-amber-600" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-gray-900 text-sm">Revoke completed task?</h3>
+                <p className="text-xs text-gray-400 mt-0.5">This will send the task back to <strong>pending</strong></p>
+              </div>
+            </div>
+            <div className="bg-gray-50 rounded-lg px-4 py-3 mb-4">
+              <p className="text-sm font-medium text-gray-800">{revokeTask.title}</p>
+              <p className="text-xs text-gray-400 mt-0.5">Assigned to: {revokeTask.assigned_to_name}</p>
+            </div>
+            <div className="mb-4">
+              <label className="block text-xs font-medium text-gray-500 mb-1">Reason for revoking (optional)</label>
+              <textarea
+                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none h-16"
+                placeholder="e.g. Incomplete work, missing documentation..."
+                value={revokeNote}
+                onChange={e => setRevokeNote(e.target.value)}
+              />
+            </div>
+            <div className="flex gap-2 justify-end">
+              <button className="btn-secondary" onClick={() => { setRevokeId(null); setRevokeNote('') }}>Cancel</button>
+              <button
+                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 active:scale-95 transition-all"
+                onClick={confirmRevoke}>
+                <RotateCcw size={14}/> Revoke task
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <main className="flex-1 p-6 overflow-auto">
         <div className="max-w-6xl mx-auto">
@@ -185,11 +243,18 @@ Weekly review,carol@company.com,review,medium,weekly,2026-07-07,Review team prog
             </div>
           </div>
 
+          {/* Member notice */}
+          {!canEdit && (
+            <div className="bg-indigo-50 border border-indigo-100 rounded-lg px-4 py-3 mb-5 text-xs text-indigo-700">
+              ✅ You can mark your assigned tasks as <strong>done</strong> using the green tick button. Contact your manager to add or change tasks.
+            </div>
+          )}
+
           {/* CSV Import panel */}
           {showImport && canEdit && (
             <div className="card p-5 mb-5">
               <h3 className="text-sm font-semibold text-gray-700 mb-1">Import tasks from CSV</h3>
-              <p className="text-xs text-gray-400 mb-4">Upload a CSV file with columns: title, assigned_to_email, category, priority, frequency, due_date, description</p>
+              <p className="text-xs text-gray-400 mb-4">Upload a CSV with columns: title, assigned_to_email, category, priority, frequency, due_date, description</p>
               <div className="flex gap-3 flex-wrap">
                 <button onClick={downloadTemplate} className="btn-secondary">
                   <Download size={14}/> Download template
@@ -296,7 +361,7 @@ Weekly review,carol@company.com,review,medium,weekly,2026-07-07,Review team prog
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-100">
-                    {['Task','Assigned to','Category','Frequency','Priority','Due','Status','Description', canEdit ? 'Actions' : ''].filter(Boolean).map(h => (
+                    {['Task','Assigned to','Category','Frequency','Priority','Due','Status','Description','Actions'].map(h => (
                       <th key={h} className="text-left text-xs font-medium text-gray-400 uppercase tracking-wide px-4 py-3 whitespace-nowrap">{h}</th>
                     ))}
                   </tr>
@@ -307,17 +372,18 @@ Weekly review,carol@company.com,review,medium,weekly,2026-07-07,Review team prog
                   ) : filtered.map(t => {
                     const mIdx = members.findIndex(m => m.id === t.assigned_to)
                     const [bg, fc] = AV[Math.max(0, mIdx) % AV.length]
+                    const isDone = t.status === 'done'
                     return (
-                      <tr key={t.id} className="border-b border-gray-50 hover:bg-gray-50/60 transition-colors">
-                        <td className="px-4 py-3 font-medium text-gray-800 max-w-[180px]">
-                          <p className="truncate">{t.title}</p>
+                      <tr key={t.id} className={`border-b border-gray-50 transition-colors ${isDone ? 'opacity-60 bg-gray-50/40' : 'hover:bg-gray-50/60'}`}>
+                        <td className="px-4 py-3 font-medium text-gray-800 max-w-[160px]">
+                          <p className={`truncate ${isDone ? 'line-through text-gray-400' : ''}`}>{t.title}</p>
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2">
                             <div className={`w-6 h-6 rounded-full ${bg} ${fc} flex items-center justify-center text-xs font-semibold flex-shrink-0`}>
                               {(t.assigned_to_name||'?').slice(0,2).toUpperCase()}
                             </div>
-                            <span className="text-xs text-gray-600 truncate max-w-[80px]">{(t.assigned_to_name||'').split(' ')[0]}</span>
+                            <span className="text-xs text-gray-600 truncate max-w-[70px]">{(t.assigned_to_name||'').split(' ')[0]}</span>
                           </div>
                         </td>
                         <td className="px-4 py-3"><span className="badge bg-gray-100 text-gray-600 text-xs">{t.category}</span></td>
@@ -325,21 +391,45 @@ Weekly review,carol@company.com,review,medium,weekly,2026-07-07,Review team prog
                         <td className="px-4 py-3"><span className={`badge text-xs ${PRI_COLOR[t.priority]}`}>{t.priority}</span></td>
                         <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{t.due_date||'–'}</td>
                         <td className="px-4 py-3"><span className={`badge text-xs ${STATUS_COLOR[t.status]}`}>{t.status}</span></td>
-                        <td className="px-4 py-3 text-xs text-gray-400 max-w-[140px]">
+                        <td className="px-4 py-3 text-xs text-gray-400 max-w-[120px]">
                           <p className="truncate" title={t.description||''}>{t.description||'–'}</p>
                         </td>
-                        {canEdit && (
-                          <td className="px-4 py-3">
-                            <div className="flex gap-1">
-                              <button onClick={() => cycleStatus(t)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-indigo-600 transition-colors" title="Cycle status">
+                        <td className="px-4 py-3">
+                          <div className="flex gap-1">
+
+                            {/* ✅ Mark done — member (own tasks) + manager + admin */}
+                            {canMarkDone(t) && !isDone && (
+                              <button onClick={() => markDone(t)} title="Mark as done"
+                                className="p-1.5 rounded-lg text-gray-400 hover:bg-green-50 hover:text-green-600 transition-colors">
+                                <CheckCircle size={14}/>
+                              </button>
+                            )}
+
+                            {/* 🔄 Cycle status — manager + admin only */}
+                            {canEdit && !isDone && (
+                              <button onClick={() => cycleStatus(t)} title="Cycle status"
+                                className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-indigo-600 transition-colors">
                                 <RefreshCw size={13}/>
                               </button>
-                              <button onClick={() => deleteTask(t.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-600 transition-colors" title="Delete">
+                            )}
+
+                            {/* ↩️ Revoke — manager + admin only, only on done tasks */}
+                            {canEdit && isDone && (
+                              <button onClick={() => setRevokeId(t.id)} title="Revoke — send back to pending"
+                                className="p-1.5 rounded-lg text-amber-400 hover:bg-amber-50 hover:text-amber-600 transition-colors">
+                                <RotateCcw size={14}/>
+                              </button>
+                            )}
+
+                            {/* 🗑️ Delete — admin only */}
+                            {isAdmin && (
+                              <button onClick={() => deleteTask(t.id)} title="Delete task"
+                                className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-600 transition-colors">
                                 <Trash2 size={13}/>
                               </button>
-                            </div>
-                          </td>
-                        )}
+                            )}
+                          </div>
+                        </td>
                       </tr>
                     )
                   })}
