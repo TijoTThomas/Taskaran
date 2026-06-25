@@ -6,7 +6,7 @@ import { Profile, Task, TaskStatus, Priority, Frequency, Category } from '@/lib/
 import Sidebar from '@/components/Sidebar'
 import PendingPopup from '@/components/PendingPopup'
 import toast from 'react-hot-toast'
-import { Plus, RefreshCw, Trash2, X, Filter, Bell } from 'lucide-react'
+import { Plus, RefreshCw, Trash2, X, Filter, Bell, Upload, Download } from 'lucide-react'
 
 const FREQ_LABEL: Record<string,string> = { daily:'Daily', weekly:'Weekly', monthly:'Monthly', quarterly:'Quarterly', yearly:'Yearly', once:'One-time' }
 const STATUS_ORDER: TaskStatus[] = ['pending','in-progress','review','done']
@@ -19,18 +19,20 @@ const EMPTY_FORM = { title:'', description:'', assigned_to:'', category:'other' 
 
 export default function TasksPage() {
   const router = useRouter()
-  const [profile, setProfile]  = useState<Profile | null>(null)
-  const [tasks,   setTasks]    = useState<Task[]>([])
-  const [members, setMembers]  = useState<Profile[]>([])
-  const [popup,   setPopup]    = useState(false)
-  const [loading, setLoading]  = useState(true)
+  const [profile, setProfile]   = useState<Profile | null>(null)
+  const [tasks,   setTasks]     = useState<Task[]>([])
+  const [members, setMembers]   = useState<Profile[]>([])
+  const [popup,   setPopup]     = useState(false)
+  const [loading, setLoading]   = useState(true)
   const [showForm, setShowForm] = useState(false)
-  const [form, setForm]        = useState(EMPTY_FORM)
-  const [saving, setSaving]    = useState(false)
-  const [fMember, setFMember]  = useState('')
-  const [fStatus, setFStatus]  = useState('')
-  const [fFreq,   setFFreq]    = useState('')
-  const [fPri,    setFPri]     = useState('')
+  const [showImport, setShowImport] = useState(false)
+  const [importing, setImporting]   = useState(false)
+  const [form, setForm]         = useState(EMPTY_FORM)
+  const [saving, setSaving]     = useState(false)
+  const [fMember, setFMember]   = useState('')
+  const [fStatus, setFStatus]   = useState('')
+  const [fFreq,   setFFreq]     = useState('')
+  const [fPri,    setFPri]      = useState('')
 
   const load = useCallback(async (uid: string) => {
     const [{ data: p }, { data: t }, { data: m }] = await Promise.all([
@@ -75,6 +77,65 @@ export default function TasksPage() {
     else { toast.success('Task removed'); if(profile) load(profile.id) }
   }
 
+  function downloadTemplate() {
+    const csv = `title,assigned_to_email,category,priority,frequency,due_date,description
+Server health check,alice@company.com,maintenance,high,daily,2026-07-01,Check all servers daily
+Monthly report,bob@company.com,report,medium,monthly,2026-07-31,Compile monthly sales data
+Weekly review,carol@company.com,review,medium,weekly,2026-07-07,Review team progress`
+    const blob = new Blob([csv], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'task_import_template.csv'
+    a.click()
+    URL.revokeObjectURL(url)
+    toast.success('Template downloaded!')
+  }
+
+  async function handleCSVImport(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file || !profile) return
+    setImporting(true)
+
+    const text = await file.text()
+    const lines = text.trim().split('\n')
+    const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/\s+/g,'_'))
+
+    let imported = 0
+    let failed = 0
+
+    for (let i = 1; i < lines.length; i++) {
+      const values = lines[i].split(',').map(v => v.trim().replace(/^"|"$/g,''))
+      const row: any = {}
+      headers.forEach((h, idx) => { row[h] = values[idx] || '' })
+
+      // find member by email
+      const member = members.find(m => m.email.toLowerCase() === (row.assigned_to_email||'').toLowerCase())
+
+      const task = {
+        title:       row.title || `Task ${i}`,
+        description: row.description || '',
+        assigned_to: member?.id || null,
+        category:    (['maintenance','review','report','meeting','audit','other'].includes(row.category) ? row.category : 'other') as Category,
+        priority:    (['high','medium','low'].includes(row.priority) ? row.priority : 'medium') as Priority,
+        frequency:   (['daily','weekly','monthly','quarterly','yearly','once'].includes(row.frequency) ? row.frequency : 'once') as Frequency,
+        status:      'pending' as TaskStatus,
+        due_date:    row.due_date || null,
+        created_by:  profile.id,
+      }
+
+      const { error } = await supabase.from('tasks').insert(task)
+      if (error) failed++
+      else imported++
+    }
+
+    toast.success(`Imported ${imported} tasks${failed > 0 ? `, ${failed} failed` : ''}`)
+    setImporting(false)
+    setShowImport(false)
+    e.target.value = ''
+    load(profile.id)
+  }
+
   const filtered = tasks.filter(t =>
     (!fMember || t.assigned_to === fMember) &&
     (!fStatus || t.status === fStatus) &&
@@ -103,7 +164,7 @@ export default function TasksPage() {
               <h1 className="text-xl font-semibold text-gray-900">Task board</h1>
               <p className="text-sm text-gray-400">{filtered.length} of {tasks.length} tasks</p>
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap">
               {canEdit && pending.length > 0 && (
                 <button onClick={() => setPopup(true)}
                   className="flex items-center gap-2 px-3 py-2 bg-red-50 text-red-700 border border-red-200 rounded-lg text-sm font-medium hover:bg-red-100">
@@ -111,12 +172,41 @@ export default function TasksPage() {
                 </button>
               )}
               {canEdit && (
-                <button onClick={() => setShowForm(!showForm)} className="btn-primary">
+                <button onClick={() => { setShowImport(!showImport); setShowForm(false) }}
+                  className="flex items-center gap-2 px-3 py-2 bg-green-50 text-green-700 border border-green-200 rounded-lg text-sm font-medium hover:bg-green-100">
+                  <Upload size={14} /> Import CSV
+                </button>
+              )}
+              {canEdit && (
+                <button onClick={() => { setShowForm(!showForm); setShowImport(false) }} className="btn-primary">
                   {showForm ? <><X size={14}/> Cancel</> : <><Plus size={14}/> Add task</>}
                 </button>
               )}
             </div>
           </div>
+
+          {/* CSV Import panel */}
+          {showImport && canEdit && (
+            <div className="card p-5 mb-5">
+              <h3 className="text-sm font-semibold text-gray-700 mb-1">Import tasks from CSV</h3>
+              <p className="text-xs text-gray-400 mb-4">Upload a CSV file with columns: title, assigned_to_email, category, priority, frequency, due_date, description</p>
+              <div className="flex gap-3 flex-wrap">
+                <button onClick={downloadTemplate} className="btn-secondary">
+                  <Download size={14}/> Download template
+                </button>
+                <label className={`btn-primary cursor-pointer ${importing ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                  <Upload size={14}/>
+                  {importing ? 'Importing...' : 'Upload CSV file'}
+                  <input type="file" accept=".csv" className="hidden" onChange={handleCSVImport} disabled={importing} />
+                </label>
+              </div>
+              <div className="mt-4 bg-gray-50 rounded-lg p-3">
+                <p className="text-xs font-medium text-gray-600 mb-1">CSV format example:</p>
+                <code className="text-xs text-gray-500 block">title, assigned_to_email, category, priority, frequency, due_date, description</code>
+                <code className="text-xs text-gray-500 block">Server check, alice@company.com, maintenance, high, daily, 2026-07-01, Check servers</code>
+              </div>
+            </div>
+          )}
 
           {/* Add task form */}
           {showForm && canEdit && (
@@ -206,7 +296,7 @@ export default function TasksPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-100">
-                    {['Task','Assigned to','Category','Frequency','Priority','Due','Status','Description', canEdit?'Actions':''].filter(Boolean).map(h => (
+                    {['Task','Assigned to','Category','Frequency','Priority','Due','Status','Description', canEdit ? 'Actions' : ''].filter(Boolean).map(h => (
                       <th key={h} className="text-left text-xs font-medium text-gray-400 uppercase tracking-wide px-4 py-3 whitespace-nowrap">{h}</th>
                     ))}
                   </tr>
