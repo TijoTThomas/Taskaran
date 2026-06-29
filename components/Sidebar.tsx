@@ -3,7 +3,7 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { Profile } from '@/lib/types'
-import { LayoutDashboard, ClipboardList, Users, Calendar, LogOut, CheckSquare, Bell, Settings } from 'lucide-react'
+import { LayoutDashboard, ClipboardList, Users, Calendar, LogOut, CheckSquare, Bell, Settings, BarChart2 } from 'lucide-react'
 
 interface Props { profile: Profile; pendingCount: number; onBellClick: () => void }
 
@@ -16,6 +16,7 @@ export default function Sidebar({ profile, pendingCount, onBellClick }: Props) {
     { href: '/tasks',     icon: ClipboardList,   label: 'Tasks',     roles: ['admin','manager','member'] },
     { href: '/team',      icon: Users,            label: 'Team',      roles: ['admin','manager','member'] },
     { href: '/schedule',  icon: Calendar,         label: 'Schedule',  roles: ['admin','manager','member'] },
+    { href: '/reports',   icon: BarChart2,        label: 'Reports',   roles: ['admin','manager','member'] },
     { href: '/settings',  icon: Settings,         label: 'Settings',  roles: ['admin'] },
   ]
 
@@ -35,7 +36,7 @@ export default function Sidebar({ profile, pendingCount, onBellClick }: Props) {
           <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center">
             <CheckSquare size={16} className="text-white" />
           </div>
-          <span className="font-semibold text-gray-900 text-sm">TaskManager</span>
+          <span className="font-semibold text-gray-900 text-sm">Taskaran</span>
         </div>
       </div>
 
