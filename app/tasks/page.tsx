@@ -103,7 +103,6 @@ export default function TasksPage() {
     return members.find(m => m.id === id)?.full_name || '—'
   }
 
-  // ── SELECTION ──
   function toggleSelect(id: string) {
     setSelected(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s })
   }
@@ -113,7 +112,6 @@ export default function TasksPage() {
   }
   function clearSelection() { setSelected(new Set()); setBulkDate(''); setBulkStatus(''); setBulkAssignee('') }
 
-  // ── BULK ACTIONS ──
   async function applyBulkDueDate() {
     if (!bulkDate || selected.size === 0) return
     setApplyingBulk(true)
@@ -138,8 +136,7 @@ export default function TasksPage() {
     if (!bulkAssignee || selected.size === 0) return
     setApplyingBulk(true)
     for (const id of Array.from(selected)) {
-      const task = tasks.find(t => t.id === id)
-      if (!task) continue
+      const task = tasks.find(t => t.id === id); if (!task) continue
       const existing: string[] = task.assignees?.length ? task.assignees : task.assigned_to ? [task.assigned_to] : []
       const updated = existing.includes(bulkAssignee) ? existing : [...existing, bulkAssignee]
       await supabase.from('tasks').update({ assignees: updated, assigned_to: updated[0] }).eq('id', id)
@@ -179,41 +176,45 @@ export default function TasksPage() {
     setSavingAssign(true)
     const { error } = await supabase.from('tasks').update({ assignees: newAssignees, assigned_to: newAssignees[0] }).eq('id', viewTask.id)
     if (error) toast.error(error.message)
-    else {
-      toast.success('Assignees updated!')
-      setEditAssignees(false)
-      setViewTask({ ...viewTask, assignees: newAssignees, assigned_to: newAssignees[0] })
-      if (profile) load(profile.id)
-    }
+    else { toast.success('Assignees updated!'); setEditAssignees(false); setViewTask({ ...viewTask, assignees: newAssignees, assigned_to: newAssignees[0] }); if (profile) load(profile.id) }
     setSavingAssign(false)
   }
 
-  // ── MARK DONE — records who closed it ──
   async function markDone(task: any) {
     const isDone = task.status === 'done'
     const next: TaskStatus = isDone ? 'in-progress' : 'done'
     const updateData: any = { status: next }
-    if (!isDone) {
-      updateData.closed_by = profile?.id
-      updateData.closed_at = new Date().toISOString()
-    } else {
-      updateData.closed_by = null
-      updateData.closed_at = null
-    }
+    if (!isDone) { updateData.closed_by = profile?.id; updateData.closed_at = new Date().toISOString() }
+    else { updateData.closed_by = null; updateData.closed_at = null }
     const { error } = await supabase.from('tasks').update(updateData).eq('id', task.id)
-    if (error) toast.error(error.message)
-    else {
-      toast.success(next === 'done' ? '✅ Marked as done!' : '↩️ Reopened')
-      if (profile) load(profile.id)
-      if (viewTask?.id === task.id) setViewTask({ ...viewTask, status: next, closed_by: updateData.closed_by, closed_at: updateData.closed_at })
+    if (error) { toast.error(error.message); return }
+
+    // For daily tasks: record per-user closure in task_closures table
+    if (task.frequency === 'daily' && profile) {
+      const today = new Date().toISOString().split('T')[0]
+      if (!isDone) {
+        // Insert closure record for this user
+        await supabase.from('task_closures').upsert({
+          task_id: task.id, user_id: profile.id,
+          closed_at: new Date().toISOString(), date: today
+        }, { onConflict: 'task_id,user_id,date' })
+      } else {
+        // Remove closure record (reopening)
+        await supabase.from('task_closures')
+          .delete().eq('task_id', task.id).eq('user_id', profile.id).eq('date', today)
+      }
     }
+
+    toast.success(next === 'done' ? '✅ Task closed!' : '↩️ Reopened')
+    if (profile) load(profile.id)
+    if (viewTask?.id === task.id) setViewTask({ ...viewTask, status: next, ...updateData })
   }
 
   async function confirmRevoke() {
     if (!revokeId) return
     const { error } = await supabase.from('tasks').update({ status: 'pending', closed_by: null, closed_at: null }).eq('id', revokeId)
     if (error) toast.error(error.message)
-    else { toast.success('Task revoked — sent back to pending'); setRevokeId(null); setRevokeNote(''); if (profile) load(profile.id) }
+    else { toast.success('Task revoked'); setRevokeId(null); setRevokeNote(''); if (profile) load(profile.id) }
   }
 
   async function cycleStatus(task: any) {
@@ -223,11 +224,7 @@ export default function TasksPage() {
     else { updateData.closed_by = null; updateData.closed_at = null }
     const { error } = await supabase.from('tasks').update(updateData).eq('id', task.id)
     if (error) toast.error(error.message)
-    else {
-      toast.success(`→ ${next}`)
-      if (profile) load(profile.id)
-      if (viewTask?.id === task.id) setViewTask({ ...viewTask, ...updateData })
-    }
+    else { toast.success(`→ ${next}`); if (profile) load(profile.id); if (viewTask?.id === task.id) setViewTask({ ...viewTask, ...updateData }) }
   }
 
   async function saveTask() {
@@ -300,9 +297,9 @@ export default function TasksPage() {
     setImporting(false); setShowImport(false); e.target.value=''; load(profile.id)
   }
 
-  const allActive  = tasks.filter(t => t.status !== 'done')
-  const allClosed  = tasks.filter(t => t.status === 'done')
-  const filtered   = (showClosed ? allClosed : allActive).filter(t => {
+  const allActive = tasks.filter(t => t.status !== 'done')
+  const allClosed = tasks.filter(t => t.status === 'done')
+  const filtered  = (showClosed ? allClosed : allActive).filter(t => {
     const ids: string[] = t.assignees?.length ? t.assignees : t.assigned_to ? [t.assigned_to] : []
     return (!fMember||ids.includes(fMember))&&(!fStatus||t.status===fStatus)&&(!fFreq||t.frequency===fFreq)&&(!fPri||t.priority===fPri)
   })
@@ -320,7 +317,7 @@ export default function TasksPage() {
     <div className="flex min-h-screen bg-gray-50">
       <Sidebar profile={profile} pendingCount={pending.length} onBellClick={() => setPopup(true)}/>
 
-      {/* ── TASK DETAIL POPUP ── */}
+      {/* TASK DETAIL POPUP */}
       {viewTask && (() => {
         const assignees = getAssigneeProfiles(viewTask)
         const closedByName = getMemberName(viewTask.closed_by)
@@ -338,116 +335,83 @@ export default function TasksPage() {
                 </div>
                 <button onClick={() => { setViewTask(null); setEditAssignees(false) }} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400"><X size={16}/></button>
               </div>
-
               <div className="px-6 py-5 space-y-4 max-h-[65vh] overflow-y-auto">
-                {/* Description */}
                 <div className="flex gap-3">
                   <AlignLeft size={16} className="text-gray-400 mt-0.5 flex-shrink-0"/>
                   <div><p className="text-xs font-medium text-gray-400 mb-1">Description</p>
                   <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">{viewTask.description || <span className="text-gray-400 italic">No description</span>}</p></div>
                 </div>
-
-                {/* Closed by banner */}
                 {viewTask.status === 'done' && viewTask.closed_by && (
                   <div className="flex items-center gap-3 bg-green-50 border border-green-200 rounded-xl px-4 py-3">
                     <CheckCircle size={18} className="text-green-600 flex-shrink-0"/>
                     <div>
-                      <p className="text-xs font-semibold text-green-800">Task closed by {closedByName}</p>
+                      <p className="text-xs font-semibold text-green-800">Closed by {closedByName}</p>
                       <p className="text-xs text-green-600 mt-0.5">{formatDateTime(viewTask.closed_at)}</p>
                     </div>
                   </div>
                 )}
-
-                {/* Assignees */}
                 <div className="flex gap-3">
                   <Users size={16} className="text-gray-400 mt-0.5 flex-shrink-0"/>
                   <div className="flex-1">
                     <div className="flex items-center justify-between mb-2">
                       <p className="text-xs font-medium text-gray-400">Assigned to ({assignees.length})</p>
-                      {canEdit && !editAssignees && (
-                        <button onClick={() => openEditAssignees(viewTask)} className="flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 font-medium">
-                          <UserPlus size={12}/> Edit assignees
-                        </button>
-                      )}
+                      {canEdit && !editAssignees && <button onClick={() => openEditAssignees(viewTask)} className="flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 font-medium"><UserPlus size={12}/> Edit assignees</button>}
                       {canEdit && editAssignees && <button onClick={() => setEditAssignees(false)} className="text-xs text-gray-400">Cancel</button>}
                     </div>
                     {editAssignees && canEdit ? (
                       <div>
                         <div className="flex flex-wrap gap-2 p-3 border border-indigo-200 rounded-lg bg-indigo-50/30 mb-3">
-                          {members.map((m, i) => {
-                            const [bg, fc] = AV[i % AV.length]
-                            const sel = newAssignees.includes(m.id)
+                          {members.map((m, i) => { const [bg,fc]=AV[i%AV.length]; const sel=newAssignees.includes(m.id)
                             return <button key={m.id} type="button" onClick={() => toggleAssignee(m.id, newAssignees, setNewAssignees)}
                               className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${sel?`${bg} ${fc} border-current shadow-sm`:'bg-white text-gray-500 border-gray-200'}`}>
                               {m.full_name.split(' ')[0]}{sel&&<span className="text-green-500">✓</span>}
                             </button>
                           })}
                         </div>
-                        <button onClick={saveAssignees} disabled={savingAssign}
-                          className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-xs font-medium hover:bg-indigo-700">
+                        <button onClick={saveAssignees} disabled={savingAssign} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-xs font-medium hover:bg-indigo-700">
                           {savingAssign?<span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"/>:<Save size={12}/>} Save
                         </button>
                       </div>
                     ) : (
                       <div className="flex flex-wrap gap-2">
                         {assignees.length === 0 ? <span className="text-sm text-gray-400">Unassigned</span>
-                          : assignees.map((m, i) => {
-                              const [bg, fc] = AV[i % AV.length]
-                              return <div key={m.id} className={`flex items-center gap-2 px-3 py-1.5 rounded-full ${bg}`}>
-                                <div className={`w-5 h-5 rounded-full flex items-center justify-center text-xs font-semibold ${fc}`}>{m.full_name.slice(0,2).toUpperCase()}</div>
-                                <span className={`text-xs font-medium ${fc}`}>{m.full_name}</span>
-                              </div>
-                            })
+                          : assignees.map((m,i) => { const [bg,fc]=AV[i%AV.length]
+                            return <div key={m.id} className={`flex items-center gap-2 px-3 py-1.5 rounded-full ${bg}`}>
+                              <div className={`w-5 h-5 rounded-full flex items-center justify-center text-xs font-semibold ${fc}`}>{m.full_name.slice(0,2).toUpperCase()}</div>
+                              <span className={`text-xs font-medium ${fc}`}>{m.full_name}</span>
+                            </div>
+                          })
                         }
                       </div>
                     )}
                   </div>
                 </div>
-
-                {/* Details */}
                 <div className="grid grid-cols-2 gap-4 bg-gray-50 rounded-xl p-4">
                   <div className="flex gap-2 items-start"><Tag size={14} className="text-gray-400 mt-0.5 flex-shrink-0"/><div><p className="text-xs text-gray-400">Category</p><p className="text-sm font-medium text-gray-700 capitalize">{viewTask.category}</p></div></div>
                   <div className="flex gap-2 items-start"><Clock size={14} className="text-gray-400 mt-0.5 flex-shrink-0"/><div><p className="text-xs text-gray-400">Frequency</p><p className="text-sm font-medium text-gray-700">{frequencies.find(f=>f.key===viewTask.frequency)?.label||viewTask.frequency}</p></div></div>
                   <div className="flex gap-2 items-start">
                     <Calendar size={14} className="text-gray-400 mt-0.5 flex-shrink-0"/>
-                    <div>
-                      <p className="text-xs text-gray-400 mb-1">Due date</p>
-                      <input type="date" className="text-sm border border-gray-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                        defaultValue={viewTask.due_date||''}
-                        onBlur={async e => {
-                          if (e.target.value !== (viewTask.due_date||'')) {
-                            const { error } = await supabase.from('tasks').update({ due_date: e.target.value||null }).eq('id', viewTask.id)
-                            if (!error) { toast.success('Due date updated'); setViewTask({...viewTask,due_date:e.target.value}); if(profile) load(profile.id) }
-                          }
-                        }}
-                      />
-                    </div>
+                    <div><p className="text-xs text-gray-400 mb-1">Due date</p>
+                    <input type="date" className="text-sm border border-gray-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                      defaultValue={viewTask.due_date||''}
+                      onBlur={async e => {
+                        if (e.target.value !== (viewTask.due_date||'')) {
+                          const { error } = await supabase.from('tasks').update({ due_date: e.target.value||null }).eq('id', viewTask.id)
+                          if (!error) { toast.success('Due date updated'); setViewTask({...viewTask,due_date:e.target.value}); if(profile) load(profile.id) }
+                        }
+                      }}/></div>
                   </div>
                   <div className="flex gap-2 items-start"><Flag size={14} className="text-gray-400 mt-0.5 flex-shrink-0"/><div><p className="text-xs text-gray-400">Priority</p><p className="text-sm font-medium text-gray-700 capitalize">{viewTask.priority}</p></div></div>
                 </div>
-
                 {assignees.length > 1 && !editAssignees && viewTask.status !== 'done' && (
                   <div className="bg-green-50 rounded-lg px-4 py-2.5 text-xs text-green-700">✅ Any of the <strong>{assignees.length} members</strong> can mark this task as done.</div>
                 )}
               </div>
-
               <div className="px-6 py-4 border-t border-gray-100 flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex gap-2 flex-wrap">
-                  {canMarkDone(viewTask) && viewTask.status !== 'done' && (
-                    <button onClick={() => markDone(viewTask)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-50 text-green-700 border border-green-200 text-xs font-medium hover:bg-green-100">
-                      <CheckCircle size={13}/> Mark done
-                    </button>
-                  )}
-                  {canEdit && viewTask.status === 'done' && (
-                    <button onClick={() => { setRevokeId(viewTask.id); setViewTask(null) }} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-50 text-amber-700 border border-amber-200 text-xs font-medium hover:bg-amber-100">
-                      <RotateCcw size={13}/> Revoke
-                    </button>
-                  )}
-                  {canEdit && viewTask.status !== 'done' && (
-                    <button onClick={() => cycleStatus(viewTask)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-200 text-xs font-medium hover:bg-indigo-100">
-                      <RefreshCw size={13}/> Next status
-                    </button>
-                  )}
+                  {canMarkDone(viewTask) && viewTask.status !== 'done' && <button onClick={() => markDone(viewTask)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-50 text-green-700 border border-green-200 text-xs font-medium hover:bg-green-100"><CheckCircle size={13}/> Mark done</button>}
+                  {canEdit && viewTask.status === 'done' && <button onClick={() => { setRevokeId(viewTask.id); setViewTask(null) }} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-50 text-amber-700 border border-amber-200 text-xs font-medium hover:bg-amber-100"><RotateCcw size={13}/> Revoke</button>}
+                  {canEdit && viewTask.status !== 'done' && <button onClick={() => cycleStatus(viewTask)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-200 text-xs font-medium hover:bg-indigo-100"><RefreshCw size={13}/> Next status</button>}
                 </div>
                 <div className="flex gap-2">
                   {isAdmin && <button onClick={() => deleteTask(viewTask.id)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-50 text-red-600 border border-red-200 text-xs font-medium hover:bg-red-100"><Trash2 size={13}/> Delete</button>}
@@ -459,7 +423,7 @@ export default function TasksPage() {
         )
       })()}
 
-      {/* ── REVOKE POPUP ── */}
+      {/* REVOKE POPUP */}
       {revokeId && revokeTask && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setRevokeId(null)}>
           <div className="bg-white rounded-2xl w-full max-w-md shadow-xl p-6" onClick={e => e.stopPropagation()}>
@@ -475,9 +439,7 @@ export default function TasksPage() {
             </div>
             <div className="flex gap-2 justify-end">
               <button className="btn-secondary" onClick={()=>{setRevokeId(null);setRevokeNote('')}}>Cancel</button>
-              <button className="flex items-center gap-2 px-4 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600" onClick={confirmRevoke}>
-                <RotateCcw size={14}/> Revoke task
-              </button>
+              <button className="flex items-center gap-2 px-4 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600" onClick={confirmRevoke}><RotateCcw size={14}/> Revoke</button>
             </div>
           </div>
         </div>
@@ -485,57 +447,29 @@ export default function TasksPage() {
 
       <main className="flex-1 p-6 overflow-auto">
         <div className="max-w-6xl mx-auto">
-
-          {/* Header */}
           <div className="flex items-center justify-between mb-5">
             <div>
               <h1 className="text-xl font-semibold text-gray-900">Task board</h1>
               <p className="text-sm text-gray-400">{filtered.length} tasks · click any row to view</p>
             </div>
             <div className="flex gap-2 flex-wrap">
-              {canEdit && pending.length > 0 && (
-                <button onClick={() => setPopup(true)} className="flex items-center gap-2 px-3 py-2 bg-red-50 text-red-700 border border-red-200 rounded-lg text-sm font-medium hover:bg-red-100">
-                  <Bell size={14}/> {pending.length} pending
-                </button>
-              )}
-              {canEdit && (
-                <button onClick={() => {setShowImport(!showImport);setShowForm(false)}}
-                  className="flex items-center gap-2 px-3 py-2 bg-green-50 text-green-700 border border-green-200 rounded-lg text-sm font-medium hover:bg-green-100">
-                  <Upload size={14}/> Import CSV
-                </button>
-              )}
-              {canEdit && (
-                <button onClick={() => {setShowForm(!showForm);setShowImport(false)}} className="btn-primary">
-                  {showForm ? <><X size={14}/> Cancel</> : <><Plus size={14}/> Add task</>}
-                </button>
-              )}
+              {canEdit && pending.length > 0 && <button onClick={() => setPopup(true)} className="flex items-center gap-2 px-3 py-2 bg-red-50 text-red-700 border border-red-200 rounded-lg text-sm font-medium hover:bg-red-100"><Bell size={14}/> {pending.length} pending</button>}
+              {canEdit && <button onClick={() => {setShowImport(!showImport);setShowForm(false)}} className="flex items-center gap-2 px-3 py-2 bg-green-50 text-green-700 border border-green-200 rounded-lg text-sm font-medium hover:bg-green-100"><Upload size={14}/> Import CSV</button>}
+              {canEdit && <button onClick={() => {setShowForm(!showForm);setShowImport(false)}} className="btn-primary">{showForm?<><X size={14}/> Cancel</>:<><Plus size={14}/> Add task</>}</button>}
             </div>
           </div>
 
-          {!canEdit && (
-            <div className="bg-indigo-50 border border-indigo-100 rounded-lg px-4 py-3 mb-5 text-xs text-indigo-700">
-              ✅ Click any task to view details and mark your assigned tasks as done.
-            </div>
-          )}
+          {!canEdit && <div className="bg-indigo-50 border border-indigo-100 rounded-lg px-4 py-3 mb-5 text-xs text-indigo-700">✅ Click any task to view details and mark your assigned tasks as done.</div>}
 
-          {/* ── ACTIVE / CLOSED TOGGLE ── */}
+          {/* Active / Closed toggle */}
           <div className="flex items-center gap-3 mb-4">
             <div className="flex rounded-lg border border-gray-200 overflow-hidden">
-              <button onClick={() => setShowClosed(false)}
-                className={`px-4 py-2 text-xs font-medium transition-colors ${!showClosed?'bg-indigo-600 text-white':'bg-white text-gray-500 hover:bg-gray-50'}`}>
-                Active ({allActive.length})
-              </button>
-              <button onClick={() => setShowClosed(true)}
-                className={`px-4 py-2 text-xs font-medium transition-colors flex items-center gap-1.5 ${showClosed?'bg-green-600 text-white':'bg-white text-gray-500 hover:bg-gray-50'}`}>
-                <History size={12}/> Closed ({allClosed.length})
-              </button>
+              <button onClick={() => setShowClosed(false)} className={`px-4 py-2 text-xs font-medium transition-colors ${!showClosed?'bg-indigo-600 text-white':'bg-white text-gray-500 hover:bg-gray-50'}`}>Active ({allActive.length})</button>
+              <button onClick={() => setShowClosed(true)} className={`px-4 py-2 text-xs font-medium transition-colors flex items-center gap-1.5 ${showClosed?'bg-green-600 text-white':'bg-white text-gray-500 hover:bg-gray-50'}`}><History size={12}/> Closed ({allClosed.length})</button>
             </div>
-            {showClosed && (
-              <span className="text-xs text-gray-400">Showing completed tasks with who closed them and when</span>
-            )}
           </div>
 
-          {/* Bulk action bar */}
+          {/* Bulk bar */}
           {canEdit && selected.size > 0 && (
             <div className="card p-4 mb-4 border-indigo-200 bg-indigo-50/50">
               <div className="flex items-center gap-3 flex-wrap">
@@ -544,33 +478,19 @@ export default function TasksPage() {
                   <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-1.5">
                     <Calendar size={13} className="text-gray-400"/>
                     <input type="date" className="text-xs focus:outline-none bg-transparent" value={bulkDate} onChange={e=>setBulkDate(e.target.value)}/>
-                    <button onClick={applyBulkDueDate} disabled={!bulkDate||applyingBulk}
-                      className="text-xs bg-indigo-600 text-white px-2 py-0.5 rounded disabled:opacity-40">Set due date</button>
+                    <button onClick={applyBulkDueDate} disabled={!bulkDate||applyingBulk} className="text-xs bg-indigo-600 text-white px-2 py-0.5 rounded disabled:opacity-40">Set due date</button>
                   </div>
                   <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-1.5">
                     <RefreshCw size={13} className="text-gray-400"/>
-                    <select className="text-xs focus:outline-none bg-transparent" value={bulkStatus} onChange={e=>setBulkStatus(e.target.value as TaskStatus|'')}>
-                      <option value="">Set status</option>
-                      {STATUS_ORDER.map(s=><option key={s} value={s}>{s}</option>)}
-                    </select>
-                    <button onClick={applyBulkStatus} disabled={!bulkStatus||applyingBulk}
-                      className="text-xs bg-indigo-600 text-white px-2 py-0.5 rounded disabled:opacity-40">Apply</button>
+                    <select className="text-xs focus:outline-none bg-transparent" value={bulkStatus} onChange={e=>setBulkStatus(e.target.value as TaskStatus|'')}><option value="">Set status</option>{STATUS_ORDER.map(s=><option key={s} value={s}>{s}</option>)}</select>
+                    <button onClick={applyBulkStatus} disabled={!bulkStatus||applyingBulk} className="text-xs bg-indigo-600 text-white px-2 py-0.5 rounded disabled:opacity-40">Apply</button>
                   </div>
                   <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-1.5">
                     <Users size={13} className="text-gray-400"/>
-                    <select className="text-xs focus:outline-none bg-transparent" value={bulkAssignee} onChange={e=>setBulkAssignee(e.target.value)}>
-                      <option value="">Add member</option>
-                      {members.map(m=><option key={m.id} value={m.id}>{m.full_name.split(' ')[0]}</option>)}
-                    </select>
-                    <button onClick={applyBulkAssignee} disabled={!bulkAssignee||applyingBulk}
-                      className="text-xs bg-indigo-600 text-white px-2 py-0.5 rounded disabled:opacity-40">Add</button>
+                    <select className="text-xs focus:outline-none bg-transparent" value={bulkAssignee} onChange={e=>setBulkAssignee(e.target.value)}><option value="">Add member</option>{members.map(m=><option key={m.id} value={m.id}>{m.full_name.split(' ')[0]}</option>)}</select>
+                    <button onClick={applyBulkAssignee} disabled={!bulkAssignee||applyingBulk} className="text-xs bg-indigo-600 text-white px-2 py-0.5 rounded disabled:opacity-40">Add</button>
                   </div>
-                  {isAdmin && (
-                    <button onClick={bulkDelete} disabled={applyingBulk}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-50 text-red-600 border border-red-200 text-xs font-medium hover:bg-red-100">
-                      <Trash2 size={12}/> Delete {selected.size}
-                    </button>
-                  )}
+                  {isAdmin && <button onClick={bulkDelete} disabled={applyingBulk} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-50 text-red-600 border border-red-200 text-xs font-medium hover:bg-red-100"><Trash2 size={12}/> Delete {selected.size}</button>}
                 </div>
                 <button onClick={clearSelection} className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1"><X size={12}/> Clear</button>
               </div>
@@ -597,18 +517,12 @@ export default function TasksPage() {
             <div className="card p-5 mb-5">
               <h3 className="text-sm font-semibold text-gray-700 mb-4">New task assignment</h3>
               <div className="grid grid-cols-2 gap-3 mb-3">
-                <div className="col-span-2">
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Task title *</label>
-                  <input className="input" placeholder="Enter task name" value={form.title} onChange={e=>setForm({...form,title:e.target.value})}/>
-                </div>
+                <div className="col-span-2"><label className="block text-xs font-medium text-gray-500 mb-1">Task title *</label><input className="input" placeholder="Enter task name" value={form.title} onChange={e=>setForm({...form,title:e.target.value})}/></div>
                 <div className="col-span-2">
                   <label className="block text-xs font-medium text-gray-500 mb-2">Assign to * <span className="text-gray-400 font-normal">— any selected member can close the task</span></label>
                   <div className="flex flex-wrap gap-2 p-3 border border-gray-200 rounded-lg bg-gray-50 min-h-[48px]">
-                    {members.map((m, i) => {
-                      const [bg, fc] = AV[i % AV.length]
-                      const sel = form.assignees.includes(m.id)
-                      return <button key={m.id} type="button"
-                        onClick={() => toggleAssignee(m.id, form.assignees, (v)=>setForm({...form,assignees:v}))}
+                    {members.map((m, i) => { const [bg,fc]=AV[i%AV.length]; const sel=form.assignees.includes(m.id)
+                      return <button key={m.id} type="button" onClick={() => toggleAssignee(m.id, form.assignees, (v)=>setForm({...form,assignees:v}))}
                         className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${sel?`${bg} ${fc} border-current shadow-sm`:'bg-white text-gray-500 border-gray-200'}`}>
                         {m.full_name.split(' ')[0]}{sel&&<span className="text-green-500">✓</span>}
                       </button>
@@ -623,9 +537,7 @@ export default function TasksPage() {
                 <div><label className="block text-xs font-medium text-gray-500 mb-1">Status</label><select className="input" value={form.status} onChange={e=>setForm({...form,status:e.target.value as TaskStatus})}><option value="pending">Pending</option><option value="in-progress">In progress</option><option value="review">In review</option></select></div>
                 <div className="col-span-2"><label className="block text-xs font-medium text-gray-500 mb-1">Description</label><textarea className="input resize-none h-16" placeholder="Task objectives, steps, notes…" value={form.description} onChange={e=>setForm({...form,description:e.target.value})}/></div>
               </div>
-              <button className="btn-primary" onClick={saveTask} disabled={saving}>
-                {saving?<span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"/>:<Plus size={14}/>} Assign task
-              </button>
+              <button className="btn-primary" onClick={saveTask} disabled={saving}>{saving?<span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"/>:<Plus size={14}/>} Assign task</button>
             </div>
           )}
 
@@ -645,12 +557,7 @@ export default function TasksPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-100">
-                    {canEdit && (
-                      <th className="px-4 py-3 w-10">
-                        <input type="checkbox" checked={filtered.length>0&&selected.size===filtered.length} onChange={selectAll}
-                          className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"/>
-                      </th>
-                    )}
+                    {canEdit && <th className="px-4 py-3 w-10"><input type="checkbox" checked={filtered.length>0&&selected.size===filtered.length} onChange={selectAll} className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"/></th>}
                     <th className="text-left text-xs font-medium text-gray-400 uppercase tracking-wide px-4 py-3">Task</th>
                     <th className="text-left text-xs font-medium text-gray-400 uppercase tracking-wide px-4 py-3">Assigned to</th>
                     <th className="text-left text-xs font-medium text-gray-400 uppercase tracking-wide px-4 py-3 whitespace-nowrap">Category</th>
@@ -664,9 +571,7 @@ export default function TasksPage() {
                 </thead>
                 <tbody>
                   {filtered.length === 0
-                    ? <tr><td colSpan={showClosed?10:9} className="text-center text-gray-400 text-sm py-12">
-                        {showClosed ? '🎉 No closed tasks yet' : 'No tasks found'}
-                      </td></tr>
+                    ? <tr><td colSpan={showClosed?10:9} className="text-center text-gray-400 text-sm py-12">{showClosed?'🎉 No closed tasks yet':'No tasks found'}</td></tr>
                     : filtered.map(t => {
                         const assignees  = getAssigneeProfiles(t)
                         const isDone     = t.status === 'done'
@@ -676,25 +581,15 @@ export default function TasksPage() {
                         const isOverdue  = t.due_date && new Date(t.due_date) < new Date() && !isDone
                         const closedByName = getMemberName(t.closed_by)
                         return (
-                          <tr key={t.id}
-                            className={`border-b border-gray-50 transition-colors ${isSelected?'bg-indigo-50':isDone?'bg-green-50/30 hover:bg-green-50/50':'hover:bg-indigo-50/30'}`}>
-                            {canEdit && (
-                              <td className="px-4 py-3" onClick={e=>e.stopPropagation()}>
-                                <input type="checkbox" checked={isSelected} onChange={()=>toggleSelect(t.id)}
-                                  className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"/>
-                              </td>
-                            )}
+                          <tr key={t.id} className={`border-b border-gray-50 transition-colors ${isSelected?'bg-indigo-50':isDone?'bg-green-50/30 hover:bg-green-50/50':'hover:bg-indigo-50/30'}`}>
+                            {canEdit && <td className="px-4 py-3" onClick={e=>e.stopPropagation()}><input type="checkbox" checked={isSelected} onChange={()=>toggleSelect(t.id)} className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"/></td>}
                             <td className="px-4 py-3 max-w-[180px] cursor-pointer" onClick={() => { setViewTask(t); setEditAssignees(false) }}>
                               <p className={`font-medium text-gray-800 truncate ${isDone?'text-gray-500':''}`}>{t.title}</p>
                             </td>
                             <td className="px-4 py-3 cursor-pointer" onClick={() => { setViewTask(t); setEditAssignees(false) }}>
                               <div className="flex items-center">
-                                {assignees.slice(0,3).map((m,i) => {
-                                  const [bg,fc]=AV[i%AV.length]
-                                  return <div key={m.id} title={m.full_name}
-                                    className={`w-6 h-6 rounded-full ${bg} ${fc} flex items-center justify-center text-xs font-semibold border-2 border-white ${i>0?'-ml-1.5':''}`}>
-                                    {m.full_name.slice(0,2).toUpperCase()}
-                                  </div>
+                                {assignees.slice(0,3).map((m,i) => { const [bg,fc]=AV[i%AV.length]
+                                  return <div key={m.id} title={m.full_name} className={`w-6 h-6 rounded-full ${bg} ${fc} flex items-center justify-center text-xs font-semibold border-2 border-white ${i>0?'-ml-1.5':''}`}>{m.full_name.slice(0,2).toUpperCase()}</div>
                                 })}
                                 {assignees.length>3&&<span className="text-xs text-gray-400 ml-1">+{assignees.length-3}</span>}
                                 {assignees.length===0&&<span className="text-xs text-gray-400">—</span>}
@@ -705,35 +600,23 @@ export default function TasksPage() {
                             <td className="px-4 py-3"><span className={`badge text-xs ${PRI_COLOR[t.priority]}`}>{t.priority}</span></td>
                             <td className="px-4 py-3" onClick={e=>e.stopPropagation()}>
                               {editDueId === t.id ? (
-                                <input type="date" autoFocus className="text-xs border border-indigo-300 rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-400 w-32"
+                                <input type="date" autoFocus className="text-xs border border-indigo-300 rounded px-1.5 py-1 focus:outline-none w-32"
                                   value={inlineDue} onChange={e=>setInlineDue(e.target.value)}
                                   onBlur={()=>saveInlineDue(t.id)}
                                   onKeyDown={e=>{if(e.key==='Enter')saveInlineDue(t.id);if(e.key==='Escape')setEditDueId(null)}}/>
                               ) : (
                                 <button onClick={()=>{setEditDueId(t.id);setInlineDue(t.due_date||'')}}
-                                  className={`text-xs px-2 py-1 rounded-lg border transition-colors ${
-                                    isOverdue?'border-red-200 bg-red-50 text-red-600 hover:bg-red-100'
-                                    :t.due_date?'border-gray-200 bg-gray-50 text-gray-600 hover:bg-indigo-50 hover:border-indigo-200 hover:text-indigo-600'
-                                    :'border-dashed border-gray-200 text-gray-400 hover:border-indigo-300 hover:text-indigo-500'
-                                  }`}>
+                                  className={`text-xs px-2 py-1 rounded-lg border transition-colors ${isOverdue?'border-red-200 bg-red-50 text-red-600':t.due_date?'border-gray-200 bg-gray-50 text-gray-600 hover:bg-indigo-50 hover:border-indigo-200':'border-dashed border-gray-200 text-gray-400 hover:border-indigo-300'}`}>
                                   {t.due_date?`${t.due_date}${isOverdue?' ⚠️':''}` :'+ Set date'}
                                 </button>
                               )}
                             </td>
                             <td className="px-4 py-3"><span className={`badge text-xs ${STATUS_COLOR[t.status]}`}>{t.status}</span></td>
-
-                            {/* Closed by column — only in closed view */}
                             {showClosed && (
                               <td className="px-4 py-3">
-                                {t.closed_by ? (
-                                  <div>
-                                    <p className="text-xs font-medium text-green-700">{closedByName}</p>
-                                    <p className="text-xs text-gray-400">{formatDateTime(t.closed_at)}</p>
-                                  </div>
-                                ) : <span className="text-xs text-gray-400">—</span>}
+                                {t.closed_by ? <div><p className="text-xs font-medium text-green-700">{closedByName}</p><p className="text-xs text-gray-400">{formatDateTime(t.closed_at)}</p></div> : <span className="text-xs text-gray-400">—</span>}
                               </td>
                             )}
-
                             <td className="px-4 py-3" onClick={e=>e.stopPropagation()}>
                               <div className="flex gap-1">
                                 {canMarkDone(t)&&!isDone&&<button onClick={()=>markDone(t)} title="Mark done" className="p-1.5 rounded-lg text-gray-400 hover:bg-green-50 hover:text-green-600 transition-colors"><CheckCircle size={13}/></button>}
