@@ -6,7 +6,7 @@ import { Profile, Task, TaskStatus, Priority } from '@/lib/types'
 import Sidebar from '@/components/Sidebar'
 import PendingPopup from '@/components/PendingPopup'
 import toast from 'react-hot-toast'
-import { Plus, RefreshCw, Trash2, X, Filter, Bell, Upload, Download, CheckCircle, RotateCcw, Eye, Calendar, Tag, Clock, AlignLeft, Flag, Users, UserPlus, Save } from 'lucide-react'
+import { Plus, RefreshCw, Trash2, X, Filter, Bell, Upload, Download, CheckCircle, RotateCcw, Calendar, Tag, Clock, AlignLeft, Flag, Users, UserPlus, Save, History } from 'lucide-react'
 
 const STATUS_ORDER: TaskStatus[] = ['pending','in-progress','review','done']
 const STATUS_COLOR: Record<string,string> = { pending:'bg-red-100 text-red-700', 'in-progress':'bg-blue-100 text-blue-700', review:'bg-amber-100 text-amber-700', done:'bg-green-100 text-green-700' }
@@ -14,6 +14,11 @@ const PRI_COLOR: Record<string,string> = { high:'bg-red-100 text-red-700', mediu
 const FREQ_COLOR_MAP: Record<string,string> = { daily:'bg-green-100 text-green-700', weekly:'bg-blue-100 text-blue-700', monthly:'bg-teal-100 text-teal-700', quarterly:'bg-amber-100 text-amber-700', yearly:'bg-rose-100 text-rose-700', once:'bg-gray-100 text-gray-600' }
 const AV = [['bg-purple-100','text-purple-700'],['bg-teal-100','text-teal-700'],['bg-amber-100','text-amber-700'],['bg-blue-100','text-blue-700'],['bg-rose-100','text-rose-700']]
 const EMPTY_FORM = { title:'', description:'', assignees:[] as string[], category:'other', priority:'medium' as Priority, frequency:'once', status:'pending' as TaskStatus, due_date:'' }
+
+function formatDateTime(dt: string | null) {
+  if (!dt) return '—'
+  return new Date(dt).toLocaleString('en-GB', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' })
+}
 
 export default function TasksPage() {
   const router = useRouter()
@@ -24,6 +29,7 @@ export default function TasksPage() {
   const [loading,      setLoading]      = useState(true)
   const [showForm,     setShowForm]     = useState(false)
   const [showImport,   setShowImport]   = useState(false)
+  const [showClosed,   setShowClosed]   = useState(false)
   const [importing,    setImporting]    = useState(false)
   const [form,         setForm]         = useState(EMPTY_FORM)
   const [saving,       setSaving]       = useState(false)
@@ -31,9 +37,9 @@ export default function TasksPage() {
   const [fStatus,      setFStatus]      = useState('')
   const [fFreq,        setFFreq]        = useState('')
   const [fPri,         setFPri]         = useState('')
-  const [revokeId,     setRevokeId]     = useState<string | null>(null)
+  const [revokeId,     setRevokeId]     = useState<string|null>(null)
   const [revokeNote,   setRevokeNote]   = useState('')
-  const [viewTask,     setViewTask]     = useState<any | null>(null)
+  const [viewTask,     setViewTask]     = useState<any|null>(null)
   const [editAssignees,setEditAssignees]= useState(false)
   const [newAssignees, setNewAssignees] = useState<string[]>([])
   const [savingAssign, setSavingAssign] = useState(false)
@@ -42,6 +48,13 @@ export default function TasksPage() {
     {key:'daily',label:'Daily'},{key:'weekly',label:'Weekly'},{key:'monthly',label:'Monthly'},
     {key:'quarterly',label:'Quarterly'},{key:'yearly',label:'Yearly'},{key:'once',label:'One-time'}
   ])
+  const [selected,     setSelected]     = useState<Set<string>>(new Set())
+  const [bulkDate,     setBulkDate]     = useState('')
+  const [bulkStatus,   setBulkStatus]   = useState<TaskStatus|''>('')
+  const [bulkAssignee, setBulkAssignee] = useState('')
+  const [applyingBulk, setApplyingBulk] = useState(false)
+  const [editDueId,    setEditDueId]    = useState<string|null>(null)
+  const [inlineDue,    setInlineDue]    = useState('')
 
   const load = useCallback(async (uid: string) => {
     const [{ data: p }, { data: t }, { data: m }, { data: s }] = await Promise.all([
@@ -85,61 +98,135 @@ export default function TasksPage() {
     return ids.includes(profile.id)
   }
 
+  function getMemberName(id: string | null) {
+    if (!id) return '—'
+    return members.find(m => m.id === id)?.full_name || '—'
+  }
+
+  // ── SELECTION ──
+  function toggleSelect(id: string) {
+    setSelected(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s })
+  }
+  function selectAll() {
+    if (selected.size === filtered.length) setSelected(new Set())
+    else setSelected(new Set(filtered.map(t => t.id)))
+  }
+  function clearSelection() { setSelected(new Set()); setBulkDate(''); setBulkStatus(''); setBulkAssignee('') }
+
+  // ── BULK ACTIONS ──
+  async function applyBulkDueDate() {
+    if (!bulkDate || selected.size === 0) return
+    setApplyingBulk(true)
+    const { error } = await supabase.from('tasks').update({ due_date: bulkDate }).in('id', Array.from(selected))
+    if (error) toast.error(error.message)
+    else { toast.success(`✅ Due date set for ${selected.size} tasks`); clearSelection(); if (profile) load(profile.id) }
+    setApplyingBulk(false)
+  }
+
+  async function applyBulkStatus() {
+    if (!bulkStatus || selected.size === 0) return
+    setApplyingBulk(true)
+    const updateData: any = { status: bulkStatus }
+    if (bulkStatus === 'done') { updateData.closed_by = profile?.id; updateData.closed_at = new Date().toISOString() }
+    const { error } = await supabase.from('tasks').update(updateData).in('id', Array.from(selected))
+    if (error) toast.error(error.message)
+    else { toast.success(`✅ Status updated for ${selected.size} tasks`); clearSelection(); if (profile) load(profile.id) }
+    setApplyingBulk(false)
+  }
+
+  async function applyBulkAssignee() {
+    if (!bulkAssignee || selected.size === 0) return
+    setApplyingBulk(true)
+    for (const id of Array.from(selected)) {
+      const task = tasks.find(t => t.id === id)
+      if (!task) continue
+      const existing: string[] = task.assignees?.length ? task.assignees : task.assigned_to ? [task.assigned_to] : []
+      const updated = existing.includes(bulkAssignee) ? existing : [...existing, bulkAssignee]
+      await supabase.from('tasks').update({ assignees: updated, assigned_to: updated[0] }).eq('id', id)
+    }
+    toast.success(`✅ Member added to ${selected.size} tasks`)
+    clearSelection(); if (profile) load(profile.id)
+    setApplyingBulk(false)
+  }
+
+  async function bulkDelete() {
+    if (selected.size === 0) return
+    if (!confirm(`Delete ${selected.size} tasks? This cannot be undone.`)) return
+    setApplyingBulk(true)
+    const { error } = await supabase.from('tasks').delete().in('id', Array.from(selected))
+    if (error) toast.error(error.message)
+    else { toast.success(`🗑️ ${selected.size} tasks deleted`); clearSelection(); if (profile) load(profile.id) }
+    setApplyingBulk(false)
+  }
+
+  async function saveInlineDue(taskId: string) {
+    const { error } = await supabase.from('tasks').update({ due_date: inlineDue || null }).eq('id', taskId)
+    if (error) toast.error(error.message)
+    else { toast.success('Due date updated'); setEditDueId(null); if (profile) load(profile.id) }
+  }
+
   function toggleAssignee(memberId: string, list: string[], setList: (v:string[])=>void) {
     setList(list.includes(memberId) ? list.filter(id => id !== memberId) : [...list, memberId])
   }
 
   function openEditAssignees(task: any) {
     const ids: string[] = task.assignees?.length ? task.assignees : task.assigned_to ? [task.assigned_to] : []
-    setNewAssignees(ids)
-    setEditAssignees(true)
+    setNewAssignees(ids); setEditAssignees(true)
   }
 
   async function saveAssignees() {
-    if (!viewTask) return
-    if (newAssignees.length === 0) { toast.error('Select at least one member'); return }
+    if (!viewTask || newAssignees.length === 0) { toast.error('Select at least one member'); return }
     setSavingAssign(true)
-    const { error } = await supabase.from('tasks').update({
-      assignees:   newAssignees,
-      assigned_to: newAssignees[0],
-    }).eq('id', viewTask.id)
+    const { error } = await supabase.from('tasks').update({ assignees: newAssignees, assigned_to: newAssignees[0] }).eq('id', viewTask.id)
     if (error) toast.error(error.message)
     else {
       toast.success('Assignees updated!')
       setEditAssignees(false)
-      const updated = { ...viewTask, assignees: newAssignees, assigned_to: newAssignees[0] }
-      setViewTask(updated)
+      setViewTask({ ...viewTask, assignees: newAssignees, assigned_to: newAssignees[0] })
       if (profile) load(profile.id)
     }
     setSavingAssign(false)
   }
 
+  // ── MARK DONE — records who closed it ──
   async function markDone(task: any) {
-    const next: TaskStatus = task.status === 'done' ? 'in-progress' : 'done'
-    const { error } = await supabase.from('tasks').update({ status: next }).eq('id', task.id)
+    const isDone = task.status === 'done'
+    const next: TaskStatus = isDone ? 'in-progress' : 'done'
+    const updateData: any = { status: next }
+    if (!isDone) {
+      updateData.closed_by = profile?.id
+      updateData.closed_at = new Date().toISOString()
+    } else {
+      updateData.closed_by = null
+      updateData.closed_at = null
+    }
+    const { error } = await supabase.from('tasks').update(updateData).eq('id', task.id)
     if (error) toast.error(error.message)
     else {
       toast.success(next === 'done' ? '✅ Marked as done!' : '↩️ Reopened')
       if (profile) load(profile.id)
-      if (viewTask?.id === task.id) setViewTask({ ...viewTask, status: next })
+      if (viewTask?.id === task.id) setViewTask({ ...viewTask, status: next, closed_by: updateData.closed_by, closed_at: updateData.closed_at })
     }
   }
 
   async function confirmRevoke() {
     if (!revokeId) return
-    const { error } = await supabase.from('tasks').update({ status: 'pending' }).eq('id', revokeId)
+    const { error } = await supabase.from('tasks').update({ status: 'pending', closed_by: null, closed_at: null }).eq('id', revokeId)
     if (error) toast.error(error.message)
     else { toast.success('Task revoked — sent back to pending'); setRevokeId(null); setRevokeNote(''); if (profile) load(profile.id) }
   }
 
   async function cycleStatus(task: any) {
     const next = STATUS_ORDER[(STATUS_ORDER.indexOf(task.status) + 1) % STATUS_ORDER.length]
-    const { error } = await supabase.from('tasks').update({ status: next }).eq('id', task.id)
+    const updateData: any = { status: next }
+    if (next === 'done') { updateData.closed_by = profile?.id; updateData.closed_at = new Date().toISOString() }
+    else { updateData.closed_by = null; updateData.closed_at = null }
+    const { error } = await supabase.from('tasks').update(updateData).eq('id', task.id)
     if (error) toast.error(error.message)
     else {
       toast.success(`→ ${next}`)
       if (profile) load(profile.id)
-      if (viewTask?.id === task.id) setViewTask({ ...viewTask, status: next })
+      if (viewTask?.id === task.id) setViewTask({ ...viewTask, ...updateData })
     }
   }
 
@@ -191,25 +278,19 @@ export default function TasksPage() {
         for (const ch of line) { if(ch==='"'){inQ=!inQ}else if(ch===','&&!inQ){values.push(cur.trim());cur=''}else{cur+=ch} }
         values.push(cur.trim())
         const row: Record<string,string> = {}
-        headers.forEach((h,idx) => { row[h]=(values[idx]||'').replace(/^"|"$/g,'').trim() })
+        headers.forEach((h,idx)=>{row[h]=(values[idx]||'').replace(/^"|"$/g,'').trim()})
         if (!row.title) continue
+        const emailsRaw = (row.assigned_to_email||'').split('|').map(e=>e.trim().toLowerCase()).filter(Boolean)
+        const assigneeIds = emailsRaw.map(email=>members.find(m=>m.email.toLowerCase()===email)?.id).filter(Boolean) as string[]
         const rawFreq = (row.frequency||'once').toLowerCase().trim()
         const rawPri  = (row.priority||'medium').toLowerCase().trim()
-
-        // Support pipe-separated emails: alice@co.com|bob@co.com
-        const emailsRaw = (row.assigned_to_email||'').split('|').map(e=>e.trim().toLowerCase()).filter(Boolean)
-        const assigneeIds = emailsRaw.map(email => members.find(m=>m.email.toLowerCase()===email)?.id).filter(Boolean) as string[]
-
         const { error } = await supabase.from('tasks').insert({
           title: row.title, description: row.description||'',
-          assigned_to: assigneeIds[0]||null,
-          assignees: assigneeIds,
+          assigned_to: assigneeIds[0]||null, assignees: assigneeIds,
           category: (row.category||'other').toLowerCase().trim(),
           priority: (['high','medium','low'].includes(rawPri)?rawPri:'medium') as Priority,
           frequency: freqMap[rawFreq]||frequencies[0]?.key||'once',
-          status: 'pending' as TaskStatus,
-          due_date: row.due_date||null,
-          created_by: profile.id,
+          status: 'pending' as TaskStatus, due_date: row.due_date||null, created_by: profile.id,
         })
         if (error){console.error('Row',i,error.message);failed++}else imported++
       }
@@ -219,7 +300,9 @@ export default function TasksPage() {
     setImporting(false); setShowImport(false); e.target.value=''; load(profile.id)
   }
 
-  const filtered = tasks.filter(t => {
+  const allActive  = tasks.filter(t => t.status !== 'done')
+  const allClosed  = tasks.filter(t => t.status === 'done')
+  const filtered   = (showClosed ? allClosed : allActive).filter(t => {
     const ids: string[] = t.assignees?.length ? t.assignees : t.assigned_to ? [t.assigned_to] : []
     return (!fMember||ids.includes(fMember))&&(!fStatus||t.status===fStatus)&&(!fFreq||t.frequency===fFreq)&&(!fPri||t.priority===fPri)
   })
@@ -240,11 +323,10 @@ export default function TasksPage() {
       {/* ── TASK DETAIL POPUP ── */}
       {viewTask && (() => {
         const assignees = getAssigneeProfiles(viewTask)
+        const closedByName = getMemberName(viewTask.closed_by)
         return (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => { setViewTask(null); setEditAssignees(false) }}>
             <div className="bg-white rounded-2xl w-full max-w-lg shadow-xl overflow-hidden" onClick={e => e.stopPropagation()}>
-
-              {/* Header */}
               <div className="flex items-start justify-between px-6 py-5 border-b border-gray-100">
                 <div className="flex-1 pr-4">
                   <div className="flex items-center gap-2 mb-1 flex-wrap">
@@ -257,79 +339,64 @@ export default function TasksPage() {
                 <button onClick={() => { setViewTask(null); setEditAssignees(false) }} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400"><X size={16}/></button>
               </div>
 
-              <div className="px-6 py-5 space-y-4 max-h-[60vh] overflow-y-auto">
-
+              <div className="px-6 py-5 space-y-4 max-h-[65vh] overflow-y-auto">
                 {/* Description */}
                 <div className="flex gap-3">
                   <AlignLeft size={16} className="text-gray-400 mt-0.5 flex-shrink-0"/>
-                  <div>
-                    <p className="text-xs font-medium text-gray-400 mb-1">Description</p>
-                    <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">
-                      {viewTask.description || <span className="text-gray-400 italic">No description</span>}
-                    </p>
-                  </div>
+                  <div><p className="text-xs font-medium text-gray-400 mb-1">Description</p>
+                  <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">{viewTask.description || <span className="text-gray-400 italic">No description</span>}</p></div>
                 </div>
 
-                {/* Assignees section */}
+                {/* Closed by banner */}
+                {viewTask.status === 'done' && viewTask.closed_by && (
+                  <div className="flex items-center gap-3 bg-green-50 border border-green-200 rounded-xl px-4 py-3">
+                    <CheckCircle size={18} className="text-green-600 flex-shrink-0"/>
+                    <div>
+                      <p className="text-xs font-semibold text-green-800">Task closed by {closedByName}</p>
+                      <p className="text-xs text-green-600 mt-0.5">{formatDateTime(viewTask.closed_at)}</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Assignees */}
                 <div className="flex gap-3">
                   <Users size={16} className="text-gray-400 mt-0.5 flex-shrink-0"/>
                   <div className="flex-1">
                     <div className="flex items-center justify-between mb-2">
                       <p className="text-xs font-medium text-gray-400">Assigned to ({assignees.length})</p>
                       {canEdit && !editAssignees && (
-                        <button onClick={() => openEditAssignees(viewTask)}
-                          className="flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 font-medium">
+                        <button onClick={() => openEditAssignees(viewTask)} className="flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 font-medium">
                           <UserPlus size={12}/> Edit assignees
                         </button>
                       )}
-                      {canEdit && editAssignees && (
-                        <button onClick={() => setEditAssignees(false)} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
-                      )}
+                      {canEdit && editAssignees && <button onClick={() => setEditAssignees(false)} className="text-xs text-gray-400">Cancel</button>}
                     </div>
-
-                    {/* Edit assignees mode */}
                     {editAssignees && canEdit ? (
                       <div>
-                        <p className="text-xs text-gray-400 mb-2">Click to add or remove assignees. Any selected member can close this task.</p>
                         <div className="flex flex-wrap gap-2 p-3 border border-indigo-200 rounded-lg bg-indigo-50/30 mb-3">
                           {members.map((m, i) => {
                             const [bg, fc] = AV[i % AV.length]
-                            const selected = newAssignees.includes(m.id)
-                            return (
-                              <button key={m.id} type="button"
-                                onClick={() => toggleAssignee(m.id, newAssignees, setNewAssignees)}
-                                className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
-                                  selected ? `${bg} ${fc} border-current shadow-sm` : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300'
-                                }`}>
-                                <span>{m.full_name.split(' ')[0]}</span>
-                                {selected && <span className="text-green-500">✓</span>}
-                              </button>
-                            )
+                            const sel = newAssignees.includes(m.id)
+                            return <button key={m.id} type="button" onClick={() => toggleAssignee(m.id, newAssignees, setNewAssignees)}
+                              className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${sel?`${bg} ${fc} border-current shadow-sm`:'bg-white text-gray-500 border-gray-200'}`}>
+                              {m.full_name.split(' ')[0]}{sel&&<span className="text-green-500">✓</span>}
+                            </button>
                           })}
                         </div>
-                        {newAssignees.length > 0 && (
-                          <p className="text-xs text-indigo-600 mb-2">{newAssignees.length} member{newAssignees.length>1?'s':''} selected — any of them can mark this task done</p>
-                        )}
                         <button onClick={saveAssignees} disabled={savingAssign}
                           className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-xs font-medium hover:bg-indigo-700">
-                          {savingAssign ? <span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"/> : <Save size={12}/>}
-                          Save assignees
+                          {savingAssign?<span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"/>:<Save size={12}/>} Save
                         </button>
                       </div>
                     ) : (
                       <div className="flex flex-wrap gap-2">
-                        {assignees.length === 0
-                          ? <span className="text-sm text-gray-400">Unassigned</span>
+                        {assignees.length === 0 ? <span className="text-sm text-gray-400">Unassigned</span>
                           : assignees.map((m, i) => {
                               const [bg, fc] = AV[i % AV.length]
-                              return (
-                                <div key={m.id} className={`flex items-center gap-2 px-3 py-1.5 rounded-full ${bg}`}>
-                                  <div className={`w-5 h-5 rounded-full flex items-center justify-center text-xs font-semibold ${fc}`}>
-                                    {m.full_name.slice(0,2).toUpperCase()}
-                                  </div>
-                                  <span className={`text-xs font-medium ${fc}`}>{m.full_name}</span>
-                                </div>
-                              )
+                              return <div key={m.id} className={`flex items-center gap-2 px-3 py-1.5 rounded-full ${bg}`}>
+                                <div className={`w-5 h-5 rounded-full flex items-center justify-center text-xs font-semibold ${fc}`}>{m.full_name.slice(0,2).toUpperCase()}</div>
+                                <span className={`text-xs font-medium ${fc}`}>{m.full_name}</span>
+                              </div>
                             })
                         }
                       </div>
@@ -337,39 +404,33 @@ export default function TasksPage() {
                   </div>
                 </div>
 
-                {/* Details grid */}
+                {/* Details */}
                 <div className="grid grid-cols-2 gap-4 bg-gray-50 rounded-xl p-4">
-                  <div className="flex gap-2 items-start">
-                    <Tag size={14} className="text-gray-400 mt-0.5 flex-shrink-0"/>
-                    <div><p className="text-xs text-gray-400">Category</p><p className="text-sm font-medium text-gray-700 capitalize">{viewTask.category}</p></div>
-                  </div>
-                  <div className="flex gap-2 items-start">
-                    <Clock size={14} className="text-gray-400 mt-0.5 flex-shrink-0"/>
-                    <div><p className="text-xs text-gray-400">Frequency</p><p className="text-sm font-medium text-gray-700">{frequencies.find(f=>f.key===viewTask.frequency)?.label||viewTask.frequency}</p></div>
-                  </div>
+                  <div className="flex gap-2 items-start"><Tag size={14} className="text-gray-400 mt-0.5 flex-shrink-0"/><div><p className="text-xs text-gray-400">Category</p><p className="text-sm font-medium text-gray-700 capitalize">{viewTask.category}</p></div></div>
+                  <div className="flex gap-2 items-start"><Clock size={14} className="text-gray-400 mt-0.5 flex-shrink-0"/><div><p className="text-xs text-gray-400">Frequency</p><p className="text-sm font-medium text-gray-700">{frequencies.find(f=>f.key===viewTask.frequency)?.label||viewTask.frequency}</p></div></div>
                   <div className="flex gap-2 items-start">
                     <Calendar size={14} className="text-gray-400 mt-0.5 flex-shrink-0"/>
                     <div>
-                      <p className="text-xs text-gray-400">Due date</p>
-                      <p className={`text-sm font-medium ${viewTask.due_date&&new Date(viewTask.due_date)<new Date()&&viewTask.status!=='done'?'text-red-600':'text-gray-700'}`}>
-                        {viewTask.due_date||'—'}{viewTask.due_date&&new Date(viewTask.due_date)<new Date()&&viewTask.status!=='done'?' ⚠️':''}
-                      </p>
+                      <p className="text-xs text-gray-400 mb-1">Due date</p>
+                      <input type="date" className="text-sm border border-gray-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                        defaultValue={viewTask.due_date||''}
+                        onBlur={async e => {
+                          if (e.target.value !== (viewTask.due_date||'')) {
+                            const { error } = await supabase.from('tasks').update({ due_date: e.target.value||null }).eq('id', viewTask.id)
+                            if (!error) { toast.success('Due date updated'); setViewTask({...viewTask,due_date:e.target.value}); if(profile) load(profile.id) }
+                          }
+                        }}
+                      />
                     </div>
                   </div>
-                  <div className="flex gap-2 items-start">
-                    <Flag size={14} className="text-gray-400 mt-0.5 flex-shrink-0"/>
-                    <div><p className="text-xs text-gray-400">Priority</p><p className="text-sm font-medium text-gray-700 capitalize">{viewTask.priority}</p></div>
-                  </div>
+                  <div className="flex gap-2 items-start"><Flag size={14} className="text-gray-400 mt-0.5 flex-shrink-0"/><div><p className="text-xs text-gray-400">Priority</p><p className="text-sm font-medium text-gray-700 capitalize">{viewTask.priority}</p></div></div>
                 </div>
 
-                {assignees.length > 1 && !editAssignees && (
-                  <div className="bg-green-50 rounded-lg px-4 py-2.5 text-xs text-green-700">
-                    ✅ Any of the <strong>{assignees.length} assigned members</strong> can mark this task as done.
-                  </div>
+                {assignees.length > 1 && !editAssignees && viewTask.status !== 'done' && (
+                  <div className="bg-green-50 rounded-lg px-4 py-2.5 text-xs text-green-700">✅ Any of the <strong>{assignees.length} members</strong> can mark this task as done.</div>
                 )}
               </div>
 
-              {/* Footer */}
               <div className="px-6 py-4 border-t border-gray-100 flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex gap-2 flex-wrap">
                   {canMarkDone(viewTask) && viewTask.status !== 'done' && (
@@ -389,11 +450,7 @@ export default function TasksPage() {
                   )}
                 </div>
                 <div className="flex gap-2">
-                  {isAdmin && (
-                    <button onClick={() => deleteTask(viewTask.id)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-50 text-red-600 border border-red-200 text-xs font-medium hover:bg-red-100">
-                      <Trash2 size={13}/> Delete
-                    </button>
-                  )}
+                  {isAdmin && <button onClick={() => deleteTask(viewTask.id)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-50 text-red-600 border border-red-200 text-xs font-medium hover:bg-red-100"><Trash2 size={13}/> Delete</button>}
                   <button onClick={() => { setViewTask(null); setEditAssignees(false) }} className="btn-secondary text-xs py-1.5">Close</button>
                 </div>
               </div>
@@ -428,10 +485,12 @@ export default function TasksPage() {
 
       <main className="flex-1 p-6 overflow-auto">
         <div className="max-w-6xl mx-auto">
+
+          {/* Header */}
           <div className="flex items-center justify-between mb-5">
             <div>
               <h1 className="text-xl font-semibold text-gray-900">Task board</h1>
-              <p className="text-sm text-gray-400">{filtered.length} of {tasks.length} tasks · click any row to view</p>
+              <p className="text-sm text-gray-400">{filtered.length} tasks · click any row to view</p>
             </div>
             <div className="flex gap-2 flex-wrap">
               {canEdit && pending.length > 0 && (
@@ -459,21 +518,70 @@ export default function TasksPage() {
             </div>
           )}
 
+          {/* ── ACTIVE / CLOSED TOGGLE ── */}
+          <div className="flex items-center gap-3 mb-4">
+            <div className="flex rounded-lg border border-gray-200 overflow-hidden">
+              <button onClick={() => setShowClosed(false)}
+                className={`px-4 py-2 text-xs font-medium transition-colors ${!showClosed?'bg-indigo-600 text-white':'bg-white text-gray-500 hover:bg-gray-50'}`}>
+                Active ({allActive.length})
+              </button>
+              <button onClick={() => setShowClosed(true)}
+                className={`px-4 py-2 text-xs font-medium transition-colors flex items-center gap-1.5 ${showClosed?'bg-green-600 text-white':'bg-white text-gray-500 hover:bg-gray-50'}`}>
+                <History size={12}/> Closed ({allClosed.length})
+              </button>
+            </div>
+            {showClosed && (
+              <span className="text-xs text-gray-400">Showing completed tasks with who closed them and when</span>
+            )}
+          </div>
+
+          {/* Bulk action bar */}
+          {canEdit && selected.size > 0 && (
+            <div className="card p-4 mb-4 border-indigo-200 bg-indigo-50/50">
+              <div className="flex items-center gap-3 flex-wrap">
+                <span className="text-sm font-semibold text-indigo-700">{selected.size} selected</span>
+                <div className="flex-1 flex gap-3 flex-wrap items-center">
+                  <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-1.5">
+                    <Calendar size={13} className="text-gray-400"/>
+                    <input type="date" className="text-xs focus:outline-none bg-transparent" value={bulkDate} onChange={e=>setBulkDate(e.target.value)}/>
+                    <button onClick={applyBulkDueDate} disabled={!bulkDate||applyingBulk}
+                      className="text-xs bg-indigo-600 text-white px-2 py-0.5 rounded disabled:opacity-40">Set due date</button>
+                  </div>
+                  <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-1.5">
+                    <RefreshCw size={13} className="text-gray-400"/>
+                    <select className="text-xs focus:outline-none bg-transparent" value={bulkStatus} onChange={e=>setBulkStatus(e.target.value as TaskStatus|'')}>
+                      <option value="">Set status</option>
+                      {STATUS_ORDER.map(s=><option key={s} value={s}>{s}</option>)}
+                    </select>
+                    <button onClick={applyBulkStatus} disabled={!bulkStatus||applyingBulk}
+                      className="text-xs bg-indigo-600 text-white px-2 py-0.5 rounded disabled:opacity-40">Apply</button>
+                  </div>
+                  <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-1.5">
+                    <Users size={13} className="text-gray-400"/>
+                    <select className="text-xs focus:outline-none bg-transparent" value={bulkAssignee} onChange={e=>setBulkAssignee(e.target.value)}>
+                      <option value="">Add member</option>
+                      {members.map(m=><option key={m.id} value={m.id}>{m.full_name.split(' ')[0]}</option>)}
+                    </select>
+                    <button onClick={applyBulkAssignee} disabled={!bulkAssignee||applyingBulk}
+                      className="text-xs bg-indigo-600 text-white px-2 py-0.5 rounded disabled:opacity-40">Add</button>
+                  </div>
+                  {isAdmin && (
+                    <button onClick={bulkDelete} disabled={applyingBulk}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-50 text-red-600 border border-red-200 text-xs font-medium hover:bg-red-100">
+                      <Trash2 size={12}/> Delete {selected.size}
+                    </button>
+                  )}
+                </div>
+                <button onClick={clearSelection} className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1"><X size={12}/> Clear</button>
+              </div>
+            </div>
+          )}
+
           {/* CSV Import */}
           {showImport && canEdit && (
             <div className="card p-5 mb-5">
               <h3 className="text-sm font-semibold text-gray-700 mb-1">Import tasks from CSV</h3>
-              <p className="text-xs text-gray-400 mb-2">Use <strong>assigned_to_email</strong> column. For multiple assignees use pipe: <code className="bg-gray-100 px-1 rounded">alice@co.com|bob@co.com</code></p>
-              <div className="grid grid-cols-2 gap-3 mb-4 text-xs">
-                <div className="bg-gray-50 rounded-lg p-3">
-                  <p className="font-medium text-gray-600 mb-1.5">Valid categories:</p>
-                  <div className="flex flex-wrap gap-1">{categories.map(c=><span key={c} className="bg-white border border-gray-200 px-2 py-0.5 rounded-full capitalize">{c}</span>)}</div>
-                </div>
-                <div className="bg-gray-50 rounded-lg p-3">
-                  <p className="font-medium text-gray-600 mb-1.5">Valid frequencies:</p>
-                  <div className="flex flex-wrap gap-1">{frequencies.map(f=><span key={f.key} className="bg-white border border-gray-200 px-2 py-0.5 rounded-full">{f.key}</span>)}</div>
-                </div>
-              </div>
+              <p className="text-xs text-gray-400 mb-3">Use pipe for multiple assignees: <code className="bg-gray-100 px-1 rounded">alice@co.com|bob@co.com</code></p>
               <div className="flex gap-3 flex-wrap">
                 <button onClick={downloadTemplate} className="btn-secondary"><Download size={14}/> Download template</button>
                 <label className={`btn-primary cursor-pointer ${importing?'opacity-50 cursor-not-allowed':''}`}>
@@ -494,64 +602,29 @@ export default function TasksPage() {
                   <input className="input" placeholder="Enter task name" value={form.title} onChange={e=>setForm({...form,title:e.target.value})}/>
                 </div>
                 <div className="col-span-2">
-                  <label className="block text-xs font-medium text-gray-500 mb-2">
-                    Assign to * <span className="text-gray-400 font-normal">— select one or more (any can close the task)</span>
-                  </label>
+                  <label className="block text-xs font-medium text-gray-500 mb-2">Assign to * <span className="text-gray-400 font-normal">— any selected member can close the task</span></label>
                   <div className="flex flex-wrap gap-2 p-3 border border-gray-200 rounded-lg bg-gray-50 min-h-[48px]">
                     {members.map((m, i) => {
                       const [bg, fc] = AV[i % AV.length]
-                      const selected = form.assignees.includes(m.id)
-                      return (
-                        <button key={m.id} type="button"
-                          onClick={() => toggleAssignee(m.id, form.assignees, (v) => setForm({...form, assignees: v}))}
-                          className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
-                            selected ? `${bg} ${fc} border-current shadow-sm` : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300'
-                          }`}>
-                          {m.full_name.split(' ')[0]}
-                          {selected && <span className="text-green-500">✓</span>}
-                        </button>
-                      )
+                      const sel = form.assignees.includes(m.id)
+                      return <button key={m.id} type="button"
+                        onClick={() => toggleAssignee(m.id, form.assignees, (v)=>setForm({...form,assignees:v}))}
+                        className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${sel?`${bg} ${fc} border-current shadow-sm`:'bg-white text-gray-500 border-gray-200'}`}>
+                        {m.full_name.split(' ')[0]}{sel&&<span className="text-green-500">✓</span>}
+                      </button>
                     })}
-                    {members.length === 0 && <span className="text-xs text-gray-400">No members — add in Team tab first</span>}
                   </div>
                   {form.assignees.length > 0 && <p className="text-xs text-indigo-600 mt-1">{form.assignees.length} selected</p>}
                 </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Category</label>
-                  <select className="input" value={form.category} onChange={e=>setForm({...form,category:e.target.value})}>
-                    {categories.map(c=><option key={c} value={c}>{c}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Priority</label>
-                  <select className="input" value={form.priority} onChange={e=>setForm({...form,priority:e.target.value as Priority})}>
-                    <option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Frequency</label>
-                  <select className="input" value={form.frequency} onChange={e=>setForm({...form,frequency:e.target.value})}>
-                    {frequencies.map(f=><option key={f.key} value={f.key}>{f.label}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Due date</label>
-                  <input className="input" type="date" value={form.due_date} onChange={e=>setForm({...form,due_date:e.target.value})}/>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Status</label>
-                  <select className="input" value={form.status} onChange={e=>setForm({...form,status:e.target.value as TaskStatus})}>
-                    <option value="pending">Pending</option><option value="in-progress">In progress</option><option value="review">In review</option>
-                  </select>
-                </div>
-                <div className="col-span-2">
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Description</label>
-                  <textarea className="input resize-none h-16" placeholder="Task objectives, steps, notes…" value={form.description} onChange={e=>setForm({...form,description:e.target.value})}/>
-                </div>
+                <div><label className="block text-xs font-medium text-gray-500 mb-1">Category</label><select className="input" value={form.category} onChange={e=>setForm({...form,category:e.target.value})}>{categories.map(c=><option key={c} value={c}>{c}</option>)}</select></div>
+                <div><label className="block text-xs font-medium text-gray-500 mb-1">Priority</label><select className="input" value={form.priority} onChange={e=>setForm({...form,priority:e.target.value as Priority})}><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select></div>
+                <div><label className="block text-xs font-medium text-gray-500 mb-1">Frequency</label><select className="input" value={form.frequency} onChange={e=>setForm({...form,frequency:e.target.value})}>{frequencies.map(f=><option key={f.key} value={f.key}>{f.label}</option>)}</select></div>
+                <div><label className="block text-xs font-medium text-gray-500 mb-1">Due date</label><input className="input" type="date" value={form.due_date} onChange={e=>setForm({...form,due_date:e.target.value})}/></div>
+                <div><label className="block text-xs font-medium text-gray-500 mb-1">Status</label><select className="input" value={form.status} onChange={e=>setForm({...form,status:e.target.value as TaskStatus})}><option value="pending">Pending</option><option value="in-progress">In progress</option><option value="review">In review</option></select></div>
+                <div className="col-span-2"><label className="block text-xs font-medium text-gray-500 mb-1">Description</label><textarea className="input resize-none h-16" placeholder="Task objectives, steps, notes…" value={form.description} onChange={e=>setForm({...form,description:e.target.value})}/></div>
               </div>
               <button className="btn-primary" onClick={saveTask} disabled={saving}>
-                {saving?<span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"/>:<Plus size={14}/>}
-                Assign task
+                {saving?<span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"/>:<Plus size={14}/>} Assign task
               </button>
             </div>
           )}
@@ -559,25 +632,11 @@ export default function TasksPage() {
           {/* Filters */}
           <div className="flex gap-2 mb-4 flex-wrap">
             <div className="flex items-center gap-1 text-xs text-gray-400"><Filter size={13}/> Filter:</div>
-            <select className="input py-1 text-xs w-auto" value={fMember} onChange={e=>setFMember(e.target.value)}>
-              <option value="">All members</option>
-              {members.map(m=><option key={m.id} value={m.id}>{m.full_name}</option>)}
-            </select>
-            <select className="input py-1 text-xs w-auto" value={fStatus} onChange={e=>setFStatus(e.target.value)}>
-              <option value="">All statuses</option>
-              {STATUS_ORDER.map(s=><option key={s} value={s}>{s}</option>)}
-            </select>
-            <select className="input py-1 text-xs w-auto" value={fFreq} onChange={e=>setFFreq(e.target.value)}>
-              <option value="">All frequencies</option>
-              {frequencies.map(f=><option key={f.key} value={f.key}>{f.label}</option>)}
-            </select>
-            <select className="input py-1 text-xs w-auto" value={fPri} onChange={e=>setFPri(e.target.value)}>
-              <option value="">All priorities</option>
-              {['high','medium','low'].map(p=><option key={p} value={p}>{p}</option>)}
-            </select>
-            {(fMember||fStatus||fFreq||fPri)&&(
-              <button className="btn-secondary py-1 text-xs" onClick={()=>{setFMember('');setFStatus('');setFFreq('');setFPri('')}}><X size={12}/> Clear</button>
-            )}
+            <select className="input py-1 text-xs w-auto" value={fMember} onChange={e=>setFMember(e.target.value)}><option value="">All members</option>{members.map(m=><option key={m.id} value={m.id}>{m.full_name}</option>)}</select>
+            <select className="input py-1 text-xs w-auto" value={fStatus} onChange={e=>setFStatus(e.target.value)}><option value="">All statuses</option>{STATUS_ORDER.map(s=><option key={s} value={s}>{s}</option>)}</select>
+            <select className="input py-1 text-xs w-auto" value={fFreq} onChange={e=>setFFreq(e.target.value)}><option value="">All frequencies</option>{frequencies.map(f=><option key={f.key} value={f.key}>{f.label}</option>)}</select>
+            <select className="input py-1 text-xs w-auto" value={fPri} onChange={e=>setFPri(e.target.value)}><option value="">All priorities</option>{['high','medium','low'].map(p=><option key={p} value={p}>{p}</option>)}</select>
+            {(fMember||fStatus||fFreq||fPri)&&<button className="btn-secondary py-1 text-xs" onClick={()=>{setFMember('');setFStatus('');setFFreq('');setFPri('')}}><X size={12}/> Clear</button>}
           </div>
 
           {/* Table */}
@@ -586,35 +645,56 @@ export default function TasksPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-100">
-                    {['Task','Assigned to','Category','Frequency','Priority','Due','Status','Actions'].map(h=>(
-                      <th key={h} className="text-left text-xs font-medium text-gray-400 uppercase tracking-wide px-4 py-3 whitespace-nowrap">{h}</th>
-                    ))}
+                    {canEdit && (
+                      <th className="px-4 py-3 w-10">
+                        <input type="checkbox" checked={filtered.length>0&&selected.size===filtered.length} onChange={selectAll}
+                          className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"/>
+                      </th>
+                    )}
+                    <th className="text-left text-xs font-medium text-gray-400 uppercase tracking-wide px-4 py-3">Task</th>
+                    <th className="text-left text-xs font-medium text-gray-400 uppercase tracking-wide px-4 py-3">Assigned to</th>
+                    <th className="text-left text-xs font-medium text-gray-400 uppercase tracking-wide px-4 py-3 whitespace-nowrap">Category</th>
+                    <th className="text-left text-xs font-medium text-gray-400 uppercase tracking-wide px-4 py-3 whitespace-nowrap">Frequency</th>
+                    <th className="text-left text-xs font-medium text-gray-400 uppercase tracking-wide px-4 py-3 whitespace-nowrap">Priority</th>
+                    <th className="text-left text-xs font-medium text-gray-400 uppercase tracking-wide px-4 py-3 whitespace-nowrap">Due date</th>
+                    <th className="text-left text-xs font-medium text-gray-400 uppercase tracking-wide px-4 py-3 whitespace-nowrap">Status</th>
+                    {showClosed && <th className="text-left text-xs font-medium text-gray-400 uppercase tracking-wide px-4 py-3 whitespace-nowrap">Closed by · When</th>}
+                    <th className="text-left text-xs font-medium text-gray-400 uppercase tracking-wide px-4 py-3">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filtered.length === 0
-                    ? <tr><td colSpan={8} className="text-center text-gray-400 text-sm py-12">No tasks found</td></tr>
+                    ? <tr><td colSpan={showClosed?10:9} className="text-center text-gray-400 text-sm py-12">
+                        {showClosed ? '🎉 No closed tasks yet' : 'No tasks found'}
+                      </td></tr>
                     : filtered.map(t => {
-                        const assignees = getAssigneeProfiles(t)
-                        const isDone    = t.status === 'done'
-                        const freqLabel = frequencies.find(f=>f.key===t.frequency)?.label||t.frequency
-                        const freqColor = FREQ_COLOR_MAP[t.frequency]||'bg-purple-100 text-purple-700'
+                        const assignees  = getAssigneeProfiles(t)
+                        const isDone     = t.status === 'done'
+                        const isSelected = selected.has(t.id)
+                        const freqLabel  = frequencies.find(f=>f.key===t.frequency)?.label||t.frequency
+                        const freqColor  = FREQ_COLOR_MAP[t.frequency]||'bg-purple-100 text-purple-700'
+                        const isOverdue  = t.due_date && new Date(t.due_date) < new Date() && !isDone
+                        const closedByName = getMemberName(t.closed_by)
                         return (
-                          <tr key={t.id} onClick={() => { setViewTask(t); setEditAssignees(false) }}
-                            className={`border-b border-gray-50 cursor-pointer transition-colors ${isDone?'opacity-60 bg-gray-50/40 hover:bg-gray-100/60':'hover:bg-indigo-50/40'}`}>
-                            <td className="px-4 py-3 max-w-[180px]">
-                              <p className={`font-medium text-gray-800 truncate ${isDone?'line-through text-gray-400':''}`}>{t.title}</p>
+                          <tr key={t.id}
+                            className={`border-b border-gray-50 transition-colors ${isSelected?'bg-indigo-50':isDone?'bg-green-50/30 hover:bg-green-50/50':'hover:bg-indigo-50/30'}`}>
+                            {canEdit && (
+                              <td className="px-4 py-3" onClick={e=>e.stopPropagation()}>
+                                <input type="checkbox" checked={isSelected} onChange={()=>toggleSelect(t.id)}
+                                  className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"/>
+                              </td>
+                            )}
+                            <td className="px-4 py-3 max-w-[180px] cursor-pointer" onClick={() => { setViewTask(t); setEditAssignees(false) }}>
+                              <p className={`font-medium text-gray-800 truncate ${isDone?'text-gray-500':''}`}>{t.title}</p>
                             </td>
-                            <td className="px-4 py-3">
+                            <td className="px-4 py-3 cursor-pointer" onClick={() => { setViewTask(t); setEditAssignees(false) }}>
                               <div className="flex items-center">
                                 {assignees.slice(0,3).map((m,i) => {
                                   const [bg,fc]=AV[i%AV.length]
-                                  return (
-                                    <div key={m.id} title={m.full_name}
-                                      className={`w-6 h-6 rounded-full ${bg} ${fc} flex items-center justify-center text-xs font-semibold border-2 border-white ${i>0?'-ml-1.5':''}`}>
-                                      {m.full_name.slice(0,2).toUpperCase()}
-                                    </div>
-                                  )
+                                  return <div key={m.id} title={m.full_name}
+                                    className={`w-6 h-6 rounded-full ${bg} ${fc} flex items-center justify-center text-xs font-semibold border-2 border-white ${i>0?'-ml-1.5':''}`}>
+                                    {m.full_name.slice(0,2).toUpperCase()}
+                                  </div>
                                 })}
                                 {assignees.length>3&&<span className="text-xs text-gray-400 ml-1">+{assignees.length-3}</span>}
                                 {assignees.length===0&&<span className="text-xs text-gray-400">—</span>}
@@ -623,34 +703,43 @@ export default function TasksPage() {
                             <td className="px-4 py-3"><span className="badge bg-gray-100 text-gray-600 text-xs capitalize">{t.category}</span></td>
                             <td className="px-4 py-3"><span className={`badge text-xs ${freqColor}`}>{freqLabel}</span></td>
                             <td className="px-4 py-3"><span className={`badge text-xs ${PRI_COLOR[t.priority]}`}>{t.priority}</span></td>
-                            <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{t.due_date||'–'}</td>
+                            <td className="px-4 py-3" onClick={e=>e.stopPropagation()}>
+                              {editDueId === t.id ? (
+                                <input type="date" autoFocus className="text-xs border border-indigo-300 rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-400 w-32"
+                                  value={inlineDue} onChange={e=>setInlineDue(e.target.value)}
+                                  onBlur={()=>saveInlineDue(t.id)}
+                                  onKeyDown={e=>{if(e.key==='Enter')saveInlineDue(t.id);if(e.key==='Escape')setEditDueId(null)}}/>
+                              ) : (
+                                <button onClick={()=>{setEditDueId(t.id);setInlineDue(t.due_date||'')}}
+                                  className={`text-xs px-2 py-1 rounded-lg border transition-colors ${
+                                    isOverdue?'border-red-200 bg-red-50 text-red-600 hover:bg-red-100'
+                                    :t.due_date?'border-gray-200 bg-gray-50 text-gray-600 hover:bg-indigo-50 hover:border-indigo-200 hover:text-indigo-600'
+                                    :'border-dashed border-gray-200 text-gray-400 hover:border-indigo-300 hover:text-indigo-500'
+                                  }`}>
+                                  {t.due_date?`${t.due_date}${isOverdue?' ⚠️':''}` :'+ Set date'}
+                                </button>
+                              )}
+                            </td>
                             <td className="px-4 py-3"><span className={`badge text-xs ${STATUS_COLOR[t.status]}`}>{t.status}</span></td>
+
+                            {/* Closed by column — only in closed view */}
+                            {showClosed && (
+                              <td className="px-4 py-3">
+                                {t.closed_by ? (
+                                  <div>
+                                    <p className="text-xs font-medium text-green-700">{closedByName}</p>
+                                    <p className="text-xs text-gray-400">{formatDateTime(t.closed_at)}</p>
+                                  </div>
+                                ) : <span className="text-xs text-gray-400">—</span>}
+                              </td>
+                            )}
+
                             <td className="px-4 py-3" onClick={e=>e.stopPropagation()}>
                               <div className="flex gap-1">
-                                {canMarkDone(t)&&!isDone&&(
-                                  <button onClick={()=>markDone(t)} title="Mark done"
-                                    className="p-1.5 rounded-lg text-gray-400 hover:bg-green-50 hover:text-green-600 transition-colors">
-                                    <CheckCircle size={13}/>
-                                  </button>
-                                )}
-                                {canEdit&&!isDone&&(
-                                  <button onClick={()=>cycleStatus(t)} title="Cycle status"
-                                    className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-indigo-600 transition-colors">
-                                    <RefreshCw size={13}/>
-                                  </button>
-                                )}
-                                {canEdit&&isDone&&(
-                                  <button onClick={()=>setRevokeId(t.id)} title="Revoke"
-                                    className="p-1.5 rounded-lg text-amber-400 hover:bg-amber-50 hover:text-amber-600 transition-colors">
-                                    <RotateCcw size={13}/>
-                                  </button>
-                                )}
-                                {isAdmin&&(
-                                  <button onClick={()=>deleteTask(t.id)} title="Delete"
-                                    className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-600 transition-colors">
-                                    <Trash2 size={13}/>
-                                  </button>
-                                )}
+                                {canMarkDone(t)&&!isDone&&<button onClick={()=>markDone(t)} title="Mark done" className="p-1.5 rounded-lg text-gray-400 hover:bg-green-50 hover:text-green-600 transition-colors"><CheckCircle size={13}/></button>}
+                                {canEdit&&!isDone&&<button onClick={()=>cycleStatus(t)} title="Cycle status" className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-indigo-600 transition-colors"><RefreshCw size={13}/></button>}
+                                {canEdit&&isDone&&<button onClick={()=>setRevokeId(t.id)} title="Revoke" className="p-1.5 rounded-lg text-amber-400 hover:bg-amber-50 hover:text-amber-600 transition-colors"><RotateCcw size={13}/></button>}
+                                {isAdmin&&<button onClick={()=>deleteTask(t.id)} title="Delete" className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-600 transition-colors"><Trash2 size={13}/></button>}
                               </div>
                             </td>
                           </tr>
