@@ -57,6 +57,27 @@ export default function TasksPage() {
   const [inlineDue,    setInlineDue]    = useState('')
 
   const load = useCallback(async (uid: string) => {
+    // ── AUTO-RESET STALE DAILY TASKS ──
+    // If a daily task was closed on a previous day, reset it to pending for today
+    const today = new Date().toISOString().split('T')[0]
+    const { data: staleDailies } = await supabase
+      .from('tasks')
+      .select('id, closed_at')
+      .eq('frequency', 'daily')
+      .eq('status', 'done')
+    if (staleDailies) {
+      const toReset = staleDailies.filter((t:any) => {
+        if (!t.closed_at) return true
+        const closedDate = t.closed_at.split('T')[0]
+        return closedDate < today
+      })
+      if (toReset.length > 0) {
+        await supabase.from('tasks')
+          .update({ status: 'pending', closed_by: null, closed_at: null })
+          .in('id', toReset.map((t:any) => t.id))
+      }
+    }
+
     const [{ data: p }, { data: t }, { data: m }, { data: s }] = await Promise.all([
       supabase.from('profiles').select('*').eq('id', uid).single(),
       supabase.from('tasks').select('*').order('created_at', { ascending: false }),
