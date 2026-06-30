@@ -23,6 +23,17 @@ export default function DashboardPage() {
   const [loading,  setLoading]  = useState(true)
 
   const load = useCallback(async (uid: string) => {
+    // Auto-reset stale daily tasks (closed on a previous day)
+    const today = new Date().toISOString().split('T')[0]
+    const { data: staleDailies } = await supabase
+      .from('tasks').select('id, closed_at').eq('frequency', 'daily').eq('status', 'done')
+    if (staleDailies) {
+      const toReset = staleDailies.filter((t:any) => !t.closed_at || t.closed_at.split('T')[0] < today)
+      if (toReset.length > 0) {
+        await supabase.from('tasks').update({ status: 'pending', closed_by: null, closed_at: null }).in('id', toReset.map((t:any) => t.id))
+      }
+    }
+
     const [{ data: p }, { data: t }, { data: m }] = await Promise.all([
       supabase.from('profiles').select('*').eq('id', uid).single(),
       supabase.from('tasks').select('*').order('created_at', { ascending: false }),
