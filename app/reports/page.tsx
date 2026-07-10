@@ -173,12 +173,18 @@ export default function ReportsPage() {
           {viewMode === 'day' && (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
               {(() => {
-                let totalTasks=0, closedTasks=0, fullDone=0
+                // Count UNIQUE tasks only (not duplicated per member)
+                const uniqueTaskIds = new Set(dailyTasks.map((t:any) => t.id))
+                const totalTasks = uniqueTaskIds.size
+                // A task is "closed" if AT LEAST ONE assigned member closed it that day
+                const closedTasks = Array.from(uniqueTaskIds).filter(tid =>
+                  reportMembers.some(m => userClosedOn(m.id, tid as string, selDate))
+                ).length
+                // Members who closed ALL their assigned daily tasks
+                let fullDone = 0
                 reportMembers.forEach(m => {
                   const mt = memberDailyTasks(m.id)
-                  totalTasks += mt.length
                   const c = mt.filter(t => userClosedOn(m.id, t.id, selDate)).length
-                  closedTasks += c
                   if (mt.length > 0 && c === mt.length) fullDone++
                 })
                 return [
