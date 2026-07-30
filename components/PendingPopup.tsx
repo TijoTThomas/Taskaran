@@ -47,20 +47,34 @@ export default function PendingPopup({ open, onClose, tasks, members, closures =
     return !!task.due_date && new Date(task.due_date) < new Date()
   }
 
-  // Overall counts — unique tasks
+  // Overall counts — unique tasks.
+  // IMPORTANT: a task counts as "pending"/"overdue" here if it is still pending
+  // for AT LEAST ONE of its assignees. Checking task.status alone (or closures
+  // without a member id) can miss a task that one assignee already closed today
+  // but that is still outstanding for a co-assignee — which is exactly what
+  // caused the summary strip to disagree with the member rows below it.
   const allPending = tasks.filter(t => {
-    if (t.frequency === 'daily') {
-      return !closures.some(c => c.task_id === t.id && c.date === today)
+    const assigneeIds = getAssigneeIds(t)
+    if (assigneeIds.length === 0) {
+      // Unassigned task — fall back to task-level status/closure state.
+      if (t.frequency === 'daily') {
+        return !closures.some(c => c.task_id === t.id && c.date === today)
+      }
+      return t.status !== 'done'
     }
-    return t.status !== 'done'
+    return assigneeIds.some(id => isTaskPendingForMember(t, id))
   })
-  const allOverdue = allPending.filter(t => t.due_date && new Date(t.due_date) < new Date())
-  const allDone    = tasks.filter(t => {
-    if (t.frequency === 'daily') {
-      return closures.some(c => c.task_id === t.id && c.date === today)
+  const allOverdue = tasks.filter(t => {
+    const assigneeIds = getAssigneeIds(t)
+    if (assigneeIds.length === 0) {
+      const pending = t.frequency === 'daily'
+        ? !closures.some(c => c.task_id === t.id && c.date === today)
+        : t.status !== 'done'
+      return pending && !!t.due_date && new Date(t.due_date) < new Date()
     }
-    return t.status === 'done'
+    return assigneeIds.some(id => isTaskOverdueForMember(t, id))
   })
+  const allDone    = tasks.filter(t => !allPending.includes(t))
 
   function countClass(n: number) {
     if (n === 0) return 'bg-gray-100 text-gray-500'
