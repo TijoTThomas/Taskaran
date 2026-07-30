@@ -8,6 +8,7 @@ interface Props {
   onClose: () => void
   tasks: any[]
   members: Profile[]
+  closures?: any[]   // task_closures rows for today (optional — falls back to status)
 }
 
 const AV_COLORS = [
@@ -18,31 +19,48 @@ const AV_COLORS = [
   ['bg-rose-100','text-rose-700'],
 ]
 
-export default function PendingPopup({ open, onClose, tasks, members }: Props) {
+export default function PendingPopup({ open, onClose, tasks, members, closures = [] }: Props) {
   const router = useRouter()
   if (!open) return null
 
-  // A task is pending if status !== done
-  const pending  = tasks.filter(t => t.status !== 'done')
-  const overdue  = tasks.filter(t => t.status !== 'done' && t.due_date && new Date(t.due_date) < new Date())
-  const done     = tasks.filter(t => t.status === 'done')
+  const today = new Date().toISOString().split('T')[0]
 
-  // Get all assignee ids for a task (supports both assignees array and legacy assigned_to)
   function getAssigneeIds(task: any): string[] {
     if (task.assignees && task.assignees.length > 0) return task.assignees
     if (task.assigned_to) return [task.assigned_to]
     return []
   }
 
-  // Pending tasks for a specific member
-  function memberPending(memberId: string) {
-    return pending.filter(t => getAssigneeIds(t).includes(memberId))
+  // A task is truly pending for a member:
+  // - non-daily: status !== 'done'
+  // - daily: no entry in task_closures for this user+task today
+  function isTaskPendingForMember(task: any, memberId: string): boolean {
+    if (!getAssigneeIds(task).includes(memberId)) return false
+    if (task.frequency === 'daily') {
+      return !closures.some(c => c.user_id === memberId && c.task_id === task.id && c.date === today)
+    }
+    return task.status !== 'done'
   }
 
-  // Overdue tasks for a specific member
-  function memberOverdue(memberId: string) {
-    return overdue.filter(t => getAssigneeIds(t).includes(memberId))
+  function isTaskOverdueForMember(task: any, memberId: string): boolean {
+    if (!isTaskPendingForMember(task, memberId)) return false
+    return !!task.due_date && new Date(task.due_date) < new Date()
   }
+
+  // Overall counts — unique tasks
+  const allPending = tasks.filter(t => {
+    if (t.frequency === 'daily') {
+      return !closures.some(c => c.task_id === t.id && c.date === today)
+    }
+    return t.status !== 'done'
+  })
+  const allOverdue = allPending.filter(t => t.due_date && new Date(t.due_date) < new Date())
+  const allDone    = tasks.filter(t => {
+    if (t.frequency === 'daily') {
+      return closures.some(c => c.task_id === t.id && c.date === today)
+    }
+    return t.status === 'done'
+  })
 
   function countClass(n: number) {
     if (n === 0) return 'bg-gray-100 text-gray-500'
@@ -69,9 +87,9 @@ export default function PendingPopup({ open, onClose, tasks, members }: Props) {
         {/* Summary strip */}
         <div className="grid grid-cols-3 gap-3 px-6 py-4 border-b border-gray-100">
           {[
-            { label: 'Pending',   val: pending.length, color: 'text-red-600' },
-            { label: 'Overdue',   val: overdue.length, color: 'text-amber-600' },
-            { label: 'Completed', val: done.length,    color: 'text-green-600' },
+            { label: 'Pending',   val: allPending.length, color: 'text-red-600' },
+            { label: 'Overdue',   val: allOverdue.length, color: 'text-amber-600' },
+            { label: 'Completed', val: allDone.length,    color: 'text-green-600' },
           ].map(s => (
             <div key={s.label} className="bg-gray-50 rounded-xl p-3 text-center">
               <div className={`text-2xl font-semibold ${s.color}`}>{s.val}</div>
@@ -85,10 +103,11 @@ export default function PendingPopup({ open, onClose, tasks, members }: Props) {
           <p className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-3">Member-wise pending</p>
           {members.map((m, i) => {
             const [bg, fc] = AV_COLORS[i % AV_COLORS.length]
-            const mp    = memberPending(m.id)
-            const mo    = memberOverdue(m.id)
-            const total = tasks.filter(t => getAssigneeIds(t).includes(m.id)).length
-            const pct   = total ? Math.round(mp.length / total * 100) : 0
+            const memberTasks = tasks.filter(t => getAssigneeIds(t).includes(m.id))
+            const mp = memberTasks.filter(t => isTaskPendingForMember(t, m.id))
+            const mo = memberTasks.filter(t => isTaskOverdueForMember(t, m.id))
+            const total = memberTasks.length
+            const pct = total ? Math.round(mp.length / total * 100) : 0
             return (
               <div key={m.id} className="flex items-center gap-3 py-2.5 border-b border-gray-50 last:border-0">
                 <div className={`w-9 h-9 rounded-full ${bg} ${fc} flex items-center justify-center text-xs font-semibold flex-shrink-0`}>
