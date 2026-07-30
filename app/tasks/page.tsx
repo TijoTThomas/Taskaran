@@ -23,6 +23,7 @@ function formatDateTime(dt: string | null) {
 export default function TasksPage() {
   const router = useRouter()
   const [profile,      setProfile]      = useState<Profile | null>(null)
+  const [closures,     setClosures]     = useState<any[]>([])
   const [tasks,        setTasks]        = useState<any[]>([])
   const [members,      setMembers]      = useState<Profile[]>([])
   const [popup,        setPopup]        = useState(false)
@@ -78,11 +79,12 @@ export default function TasksPage() {
       }
     }
 
-    const [{ data: p }, { data: t }, { data: m }, { data: s }] = await Promise.all([
+    const [{ data: p }, { data: t }, { data: m }, { data: s }, { data: cl }] = await Promise.all([
       supabase.from('profiles').select('*').eq('id', uid).single(),
       supabase.from('tasks').select('*').order('created_at', { ascending: false }),
       supabase.from('profiles').select('*').order('full_name'),
       supabase.from('app_settings').select('*'),
+      supabase.from('task_closures').select('*'),
     ])
     if (p) setProfile(p)
     if (m) setMembers(m)
@@ -93,6 +95,7 @@ export default function TasksPage() {
       if (catRow)  setCategories(JSON.parse(catRow.value))
       if (freqRow) setFrequencies(JSON.parse(freqRow.value))
     }
+    if (cl) setClosures(cl)
   }, [])
 
   useEffect(() => {
@@ -331,7 +334,11 @@ export default function TasksPage() {
     </div>
   )
 
-  const pending    = tasks.filter(t => t.status !== 'done')
+  const todayStr   = new Date().toISOString().split('T')[0]
+  const pending    = tasks.filter(t => {
+    if (t.frequency === 'daily') return !closures.some((c:any) => c.task_id === t.id && c.date === todayStr)
+    return t.status !== 'done'
+  })
   const revokeTask = tasks.find(t => t.id === revokeId)
 
   return (
@@ -657,7 +664,7 @@ export default function TasksPage() {
         </div>
       </main>
 
-      <PendingPopup open={popup} onClose={()=>setPopup(false)} tasks={tasks} members={members}/>
+      <PendingPopup open={popup} onClose={()=>setPopup(false)} tasks={tasks} members={members} closures={closures}/>
     </div>
   )
 }
