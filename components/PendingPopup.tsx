@@ -87,9 +87,9 @@ export default function PendingPopup({ open, onClose, tasks, members, closures =
         {/* Summary strip */}
         <div className="grid grid-cols-3 gap-3 px-6 py-4 border-b border-gray-100">
           {[
-            { label: 'Pending',   val: allPending.length, color: 'text-red-600' },
-            { label: 'Overdue',   val: allOverdue.length, color: 'text-amber-600' },
-            { label: 'Completed', val: allDone.length,    color: 'text-green-600' },
+            { label: 'Unique tasks pending', val: allPending.length, color: 'text-red-600' },
+            { label: 'Overdue',              val: allOverdue.length, color: 'text-amber-600' },
+            { label: 'Completed',            val: allDone.length,    color: 'text-green-600' },
           ].map(s => (
             <div key={s.label} className="bg-gray-50 rounded-xl p-3 text-center">
               <div className={`text-2xl font-semibold ${s.color}`}>{s.val}</div>
@@ -100,7 +100,10 @@ export default function PendingPopup({ open, onClose, tasks, members, closures =
 
         {/* Member rows */}
         <div className="px-6 py-3 max-h-72 overflow-y-auto">
-          <p className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-3">Member-wise pending</p>
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-xs font-medium text-gray-400 uppercase tracking-wide">Member-wise pending</p>
+            <p className="text-xs text-gray-400 italic">Tasks shared between members count for each</p>
+          </div>
           {members.map((m, i) => {
             const [bg, fc] = AV_COLORS[i % AV_COLORS.length]
             const memberTasks = tasks.filter(t => getAssigneeIds(t).includes(m.id))
