@@ -17,18 +17,18 @@ function toDateStr(d: Date) { return d.toISOString().split('T')[0] }
 
 export default function DashboardPage() {
   const router = useRouter()
-  const [profile,  setProfile]  = useState<Profile | null>(null)
-  const [tasks,    setTasks]    = useState<any[]>([])
-  const [members,  setMembers]  = useState<Profile[]>([])
-  const [closures, setClosures] = useState<any[]>([])
-  const [popup,    setPopup]    = useState(false)
-  const [loading,  setLoading]  = useState(true)
+  const [profile,     setProfile]     = useState<Profile | null>(null)
+  const [tasks,       setTasks]       = useState<any[]>([])
+  const [members,     setMembers]     = useState<Profile[]>([])
+  const [closures,    setClosures]    = useState<any[]>([])
+  const [popup,       setPopup]       = useState(false)
+  const [loading,     setLoading]     = useState(true)
   const [detailPopup, setDetailPopup] = useState<{freq:string, type:'closed'|'open', tasks:any[]} | null>(null)
-  const [expandedFreq, setExpandedFreq] = useState<string|null>(null)
+  const [expandedFreq,setExpandedFreq]= useState<string|null>(null)
 
-  const today = toDateStr(new Date())
-  const thisMonth = today.slice(0,7) // YYYY-MM
-  const thisYear  = today.slice(0,4) // YYYY
+  const today     = toDateStr(new Date())
+  const thisMonth = today.slice(0,7)
+  const thisYear  = today.slice(0,4)
 
   const load = useCallback(async (uid: string) => {
     // Auto-reset stale daily tasks
@@ -79,27 +79,38 @@ export default function DashboardPage() {
     return []
   }
 
-  // Was task closed by user on specific date
+  // ── Unified "is this task pending?" logic ────────────────────────────────
+  // Daily tasks: check task_closures (status resets daily so status alone is wrong)
+  // Other tasks: use status field
+  function isTaskPending(task: any): boolean {
+    if (task.frequency === 'daily') {
+      return !closures.some(c => c.task_id === task.id && c.date === today)
+    }
+    return task.status !== 'done'
+  }
+
+  function isTaskDone(task: any): boolean {
+    if (task.frequency === 'daily') {
+      return closures.some(c => c.task_id === task.id && c.date === today)
+    }
+    return task.status === 'done'
+  }
+
+  // ── Per-user closure checks (for frequency breakdown) ────────────────────
   function closedByUserOn(userId: string, taskId: string, dateStr: string) {
     return closures.some(c => c.user_id === userId && c.task_id === taskId && c.date === dateStr)
   }
-
-  // Was task closed by user in month (YYYY-MM)
   function closedByUserInMonth(userId: string, taskId: string, month: string) {
     return closures.some(c => c.user_id === userId && c.task_id === taskId && c.date.startsWith(month))
   }
-
-  // Was task closed by user in year (YYYY)
   function closedByUserInYear(userId: string, taskId: string, year: string) {
     return closures.some(c => c.user_id === userId && c.task_id === taskId && c.date.startsWith(year))
   }
 
-  // Get tasks assigned to a member with a given frequency
   function memberTasksByFreq(memberId: string, freq: string) {
     return tasks.filter(t => t.frequency === freq && getAssigneeIds(t).includes(memberId))
   }
 
-  // Compute closed/open for a member+frequency in a time window
   function getMemberFreqStats(memberId: string, freq: string) {
     const mt = memberTasksByFreq(memberId, freq)
     let closed: any[] = [], open: any[] = []
@@ -128,13 +139,12 @@ export default function DashboardPage() {
     { key:'once',      label:'One-time',  period:'All time' },
   ]
 
-  const pending  = tasks.filter(t => t.status !== 'done')
-  const overdue  = tasks.filter(t => t.status !== 'done' && t.due_date && new Date(t.due_date) < new Date())
-  const done     = tasks.filter(t => t.status === 'done')
+  // ── Stat counts — consistent across all three places ─────────────────────
+  const pending  = tasks.filter(t => isTaskPending(t))
+  const overdue  = tasks.filter(t => isTaskPending(t) && t.due_date && new Date(t.due_date) < new Date())
+  const done     = tasks.filter(t => isTaskDone(t))
   const canAlert = profile.role === 'admin' || profile.role === 'manager'
-
-  // For admin/manager: show all members. For member: show only self
-  const isMgr = profile.role === 'admin' || profile.role === 'manager'
+  const isMgr    = profile.role === 'admin' || profile.role === 'manager'
   const reportMembers = isMgr ? members : members.filter(m => m.id === profile.id)
 
   return (
@@ -188,9 +198,7 @@ export default function DashboardPage() {
                                   </div>
                                 )
                               })}
-                              {task.due_date && (
-                                <span className="text-xs text-gray-400">Due: {task.due_date}</span>
-                              )}
+                              {task.due_date && <span className="text-xs text-gray-400">Due: {task.due_date}</span>}
                               {task.closed_at && (
                                 <span className="text-xs text-green-600">
                                   Closed: {new Date(task.closed_at).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}
@@ -230,13 +238,13 @@ export default function DashboardPage() {
             )}
           </div>
 
-          {/* Overall stat cards */}
+          {/* Stat cards — all use the same isTaskPending/isTaskDone logic */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
             {[
-              { label:'Total tasks',  val: tasks.length,   icon: ClipboardList, color:'text-indigo-600', bg:'bg-indigo-50' },
-              { label:'Pending',      val: pending.length,  icon: Clock,         color:'text-red-600',    bg:'bg-red-50',   click: canAlert?()=>setPopup(true):undefined },
-              { label:'Overdue',      val: overdue.length,  icon: AlertTriangle, color:'text-amber-600',  bg:'bg-amber-50', click: canAlert?()=>setPopup(true):undefined },
-              { label:'Completed',    val: done.length,     icon: CheckCircle,   color:'text-green-600',  bg:'bg-green-50' },
+              { label:'Total tasks', val: tasks.length,  icon: ClipboardList, color:'text-indigo-600', bg:'bg-indigo-50' },
+              { label:'Pending',     val: pending.length, icon: Clock,         color:'text-red-600',    bg:'bg-red-50',   click: canAlert?()=>setPopup(true):undefined },
+              { label:'Overdue',     val: overdue.length, icon: AlertTriangle, color:'text-amber-600',  bg:'bg-amber-50', click: canAlert?()=>setPopup(true):undefined },
+              { label:'Completed',   val: done.length,    icon: CheckCircle,   color:'text-green-600',  bg:'bg-green-50' },
             ].map(s => (
               <div key={s.label} onClick={s.click}
                 className={`card p-4 ${s.click?'cursor-pointer hover:shadow-md':''} transition-shadow`}>
@@ -249,7 +257,7 @@ export default function DashboardPage() {
             ))}
           </div>
 
-          {/* ── TASK STATUS BY FREQUENCY — MEMBER WISE ── */}
+          {/* Task completion by frequency — member wise */}
           <div className="card overflow-hidden mb-4">
             <div className="px-5 py-4 border-b border-gray-100">
               <h3 className="text-sm font-semibold text-gray-800">Task completion by frequency — member wise</h3>
@@ -257,13 +265,10 @@ export default function DashboardPage() {
             </div>
 
             {FREQ_SECTIONS.map(({ key, label, period }) => {
-              // Check if anyone has tasks with this frequency
               const hasTasks = reportMembers.some(m => memberTasksByFreq(m.id, key).length > 0)
               if (!hasTasks) return null
 
               const isExpanded = expandedFreq === key
-
-              // Aggregate for header
               let totalClosed = 0, totalOpen = 0, totalAll = 0
               reportMembers.forEach(m => {
                 const s = getMemberFreqStats(m.id, key)
@@ -275,14 +280,11 @@ export default function DashboardPage() {
 
               return (
                 <div key={key} className="border-b border-gray-50 last:border-0">
-                  {/* Frequency header row */}
                   <button
                     onClick={() => setExpandedFreq(isExpanded ? null : key)}
                     className="w-full flex items-center gap-4 px-5 py-3.5 hover:bg-gray-50 transition-colors text-left">
                     <span className={`badge text-xs w-20 justify-center flex-shrink-0 ${FREQ_COLOR[key]}`}>{label}</span>
                     <span className="text-xs text-gray-400 w-20 flex-shrink-0">{period}</span>
-
-                    {/* Progress bar */}
                     <div className="flex-1 flex items-center gap-2">
                       <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
                         <div className={`h-full rounded-full ${pct===100?'bg-green-500':pct===0?'bg-red-300':'bg-amber-400'}`}
@@ -290,8 +292,6 @@ export default function DashboardPage() {
                       </div>
                       <span className="text-xs text-gray-500 w-8 text-right">{pct}%</span>
                     </div>
-
-                    {/* Totals */}
                     <div className="flex items-center gap-3 flex-shrink-0">
                       <span className="text-xs text-green-600 font-semibold w-16 text-right">{totalClosed} closed</span>
                       <span className="text-xs text-red-500 font-semibold w-14 text-right">{totalOpen} open</span>
@@ -299,7 +299,6 @@ export default function DashboardPage() {
                     </div>
                   </button>
 
-                  {/* Expanded member rows */}
                   {isExpanded && (
                     <div className="bg-gray-50/60 border-t border-gray-100 divide-y divide-gray-100">
                       {reportMembers.map((m, mi) => {
@@ -307,16 +306,12 @@ export default function DashboardPage() {
                         if (s.total === 0) return null
                         const [bg, fc] = AV[mi % AV.length]
                         const mpct = Math.round(s.closed.length/s.total*100)
-
                         return (
                           <div key={m.id} className="flex items-center gap-4 px-6 py-3">
-                            {/* Avatar */}
                             <div className={`w-7 h-7 rounded-full ${bg} ${fc} flex items-center justify-center text-xs font-semibold flex-shrink-0`}>
                               {m.full_name.slice(0,2).toUpperCase()}
                             </div>
                             <span className="text-xs font-medium text-gray-700 w-28 flex-shrink-0 truncate">{m.full_name.split(' ')[0]}</span>
-
-                            {/* Progress */}
                             <div className="flex-1 flex items-center gap-2">
                               <div className="flex-1 h-1.5 bg-gray-200 rounded-full overflow-hidden">
                                 <div className={`h-full rounded-full ${mpct===100?'bg-green-500':mpct===0?'bg-red-300':'bg-amber-400'}`}
@@ -324,8 +319,6 @@ export default function DashboardPage() {
                               </div>
                               <span className="text-xs text-gray-400 w-8 text-right">{mpct}%</span>
                             </div>
-
-                            {/* Clickable closed / open */}
                             <div className="flex items-center gap-2 flex-shrink-0">
                               <button
                                 onClick={() => setDetailPopup({ freq: `${label} — ${m.full_name.split(' ')[0]}`, type:'closed', tasks: s.closed })}
@@ -397,7 +390,8 @@ export default function DashboardPage() {
         </div>
       </main>
 
-      <PendingPopup open={popup} onClose={() => setPopup(false)} tasks={tasks} members={members}/>
+      {/* Pass closures to PendingPopup so it uses the same logic */}
+      <PendingPopup open={popup} onClose={() => setPopup(false)} tasks={tasks} members={members} closures={closures}/>
     </div>
   )
 }
