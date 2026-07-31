@@ -9,6 +9,11 @@ import {
   ClipboardList, CheckCircle, AlertTriangle, Clock,
   Bell, CheckCircle2, XCircle, ChevronDown, ChevronUp
 } from 'lucide-react'
+import {
+  getAssigneeIds as getAssigneeIdsShared, periodKeyFor, closedByMemberInPeriod,
+  isTaskPending as isTaskPendingShared, isTaskDone as isTaskDoneShared,
+  isTaskOverdue as isTaskOverdueShared, ClosureRow
+} from '@/lib/taskStatus'
 
 const AV = [['bg-purple-100','text-purple-700'],['bg-teal-100','text-teal-700'],['bg-amber-100','text-amber-700'],['bg-blue-100','text-blue-700'],['bg-rose-100','text-rose-700']]
 const FREQ_COLOR: Record<string,string> = { daily:'bg-green-100 text-green-700', weekly:'bg-blue-100 text-blue-700', monthly:'bg-teal-100 text-teal-700', quarterly:'bg-amber-100 text-amber-700', yearly:'bg-rose-100 text-rose-700', once:'bg-gray-100 text-gray-600' }
@@ -73,38 +78,19 @@ export default function DashboardPage() {
     </div>
   )
 
-  function getAssigneeIds(task: any): string[] {
-    if (task.assignees?.length) return task.assignees
-    if (task.assigned_to) return [task.assigned_to]
-    return []
-  }
+  const getAssigneeIds = getAssigneeIdsShared
 
   // ── Unified "is this task pending?" logic ────────────────────────────────
-  // Daily tasks: check task_closures (status resets daily so status alone is wrong)
-  // Other tasks: use status field
+  // Every frequency (not just daily) is now resolved from per-user, per-period
+  // rows in task_closures — see lib/taskStatus.ts. This is the same logic
+  // PendingPopup uses, so the dashboard cards, the popup, and the frequency
+  // breakdown below can no longer disagree with each other.
   function isTaskPending(task: any): boolean {
-    if (task.frequency === 'daily') {
-      return !closures.some(c => c.task_id === task.id && c.date === today)
-    }
-    return task.status !== 'done'
+    return isTaskPendingShared(task, closures as ClosureRow[])
   }
 
   function isTaskDone(task: any): boolean {
-    if (task.frequency === 'daily') {
-      return closures.some(c => c.task_id === task.id && c.date === today)
-    }
-    return task.status === 'done'
-  }
-
-  // ── Per-user closure checks (for frequency breakdown) ────────────────────
-  function closedByUserOn(userId: string, taskId: string, dateStr: string) {
-    return closures.some(c => c.user_id === userId && c.task_id === taskId && c.date === dateStr)
-  }
-  function closedByUserInMonth(userId: string, taskId: string, month: string) {
-    return closures.some(c => c.user_id === userId && c.task_id === taskId && c.date.startsWith(month))
-  }
-  function closedByUserInYear(userId: string, taskId: string, year: string) {
-    return closures.some(c => c.user_id === userId && c.task_id === taskId && c.date.startsWith(year))
+    return isTaskDoneShared(task, closures as ClosureRow[])
   }
 
   function memberTasksByFreq(memberId: string, freq: string) {
@@ -113,19 +99,12 @@ export default function DashboardPage() {
 
   function getMemberFreqStats(memberId: string, freq: string) {
     const mt = memberTasksByFreq(memberId, freq)
-    let closed: any[] = [], open: any[] = []
-    if (freq === 'daily') {
-      closed = mt.filter(t => closedByUserOn(memberId, t.id, today))
-      open   = mt.filter(t => !closedByUserOn(memberId, t.id, today))
-    } else if (freq === 'monthly' || freq === 'quarterly') {
-      closed = mt.filter(t => closedByUserInMonth(memberId, t.id, thisMonth) || t.status === 'done')
-      open   = mt.filter(t => !(closedByUserInMonth(memberId, t.id, thisMonth) || t.status === 'done'))
-    } else if (freq === 'yearly') {
-      closed = mt.filter(t => closedByUserInYear(memberId, t.id, thisYear) || t.status === 'done')
-      open   = mt.filter(t => !(closedByUserInYear(memberId, t.id, thisYear) || t.status === 'done'))
-    } else {
-      closed = mt.filter(t => t.status === 'done')
-      open   = mt.filter(t => t.status !== 'done')
+    const closed: any[] = []
+    const open: any[] = []
+    for (const t of mt) {
+      const key = periodKeyFor(t.frequency, new Date())
+      const isClosed = closedByMemberInPeriod(closures as ClosureRow[], memberId, t.id, key)
+      ;(isClosed ? closed : open).push(t)
     }
     return { total: mt.length, closed, open }
   }
@@ -141,7 +120,7 @@ export default function DashboardPage() {
 
   // ── Stat counts — consistent across all three places ─────────────────────
   const pending  = tasks.filter(t => isTaskPending(t))
-  const overdue  = tasks.filter(t => isTaskPending(t) && t.due_date && new Date(t.due_date) < new Date())
+  const overdue  = tasks.filter(t => isTaskOverdueShared(t, closures as ClosureRow[]))
   const done     = tasks.filter(t => isTaskDone(t))
   const canAlert = profile.role === 'admin' || profile.role === 'manager'
   const isMgr    = profile.role === 'admin' || profile.role === 'manager'
