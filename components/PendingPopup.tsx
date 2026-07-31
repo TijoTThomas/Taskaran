@@ -2,13 +2,17 @@
 import { Profile } from '@/lib/types'
 import { X, AlertCircle, ArrowRight } from 'lucide-react'
 import { useRouter } from 'next/navigation'
+import {
+  getAssigneeIds, isTaskPendingForMember, isTaskOverdueForMember,
+  isTaskPending, isTaskOverdue, ClosureRow
+} from '@/lib/taskStatus'
 
 interface Props {
   open: boolean
   onClose: () => void
   tasks: any[]
   members: Profile[]
-  closures?: any[]   // task_closures rows for today (optional — falls back to status)
+  closures?: ClosureRow[]   // task_closures rows (per user, per period, ALL frequencies)
 }
 
 const AV_COLORS = [
@@ -23,58 +27,16 @@ export default function PendingPopup({ open, onClose, tasks, members, closures =
   const router = useRouter()
   if (!open) return null
 
-  const today = new Date().toISOString().split('T')[0]
-
-  function getAssigneeIds(task: any): string[] {
-    if (task.assignees && task.assignees.length > 0) return task.assignees
-    if (task.assigned_to) return [task.assigned_to]
-    return []
-  }
-
-  // A task is truly pending for a member:
-  // - non-daily: status !== 'done'
-  // - daily: no entry in task_closures for this user+task today
-  function isTaskPendingForMember(task: any, memberId: string): boolean {
-    if (!getAssigneeIds(task).includes(memberId)) return false
-    if (task.frequency === 'daily') {
-      return !closures.some(c => c.user_id === memberId && c.task_id === task.id && c.date === today)
-    }
-    return task.status !== 'done'
-  }
-
-  function isTaskOverdueForMember(task: any, memberId: string): boolean {
-    if (!isTaskPendingForMember(task, memberId)) return false
-    return !!task.due_date && new Date(task.due_date) < new Date()
-  }
-
   // Overall counts — unique tasks.
-  // IMPORTANT: a task counts as "pending"/"overdue" here if it is still pending
-  // for AT LEAST ONE of its assignees. Checking task.status alone (or closures
-  // without a member id) can miss a task that one assignee already closed today
-  // but that is still outstanding for a co-assignee — which is exactly what
-  // caused the summary strip to disagree with the member rows below it.
-  const allPending = tasks.filter(t => {
-    const assigneeIds = getAssigneeIds(t)
-    if (assigneeIds.length === 0) {
-      // Unassigned task — fall back to task-level status/closure state.
-      if (t.frequency === 'daily') {
-        return !closures.some(c => c.task_id === t.id && c.date === today)
-      }
-      return t.status !== 'done'
-    }
-    return assigneeIds.some(id => isTaskPendingForMember(t, id))
-  })
-  const allOverdue = tasks.filter(t => {
-    const assigneeIds = getAssigneeIds(t)
-    if (assigneeIds.length === 0) {
-      const pending = t.frequency === 'daily'
-        ? !closures.some(c => c.task_id === t.id && c.date === today)
-        : t.status !== 'done'
-      return pending && !!t.due_date && new Date(t.due_date) < new Date()
-    }
-    return assigneeIds.some(id => isTaskOverdueForMember(t, id))
-  })
-  const allDone    = tasks.filter(t => !allPending.includes(t))
+  // A task counts as pending/overdue here if it is still pending for AT
+  // LEAST ONE of its assignees, matching "tasks shared between members
+  // count for each" below. This uses per-assignee, per-period closures for
+  // every frequency (see lib/taskStatus.ts), so one co-assignee closing a
+  // shared weekly/monthly/yearly task no longer silently marks it done for
+  // everyone else.
+  const allPending = tasks.filter(t => isTaskPending(t, closures))
+  const allOverdue = tasks.filter(t => isTaskOverdue(t, closures))
+  const allDone    = tasks.filter(t => !isTaskPending(t, closures))
 
   function countClass(n: number) {
     if (n === 0) return 'bg-gray-100 text-gray-500'
@@ -121,8 +83,8 @@ export default function PendingPopup({ open, onClose, tasks, members, closures =
           {members.map((m, i) => {
             const [bg, fc] = AV_COLORS[i % AV_COLORS.length]
             const memberTasks = tasks.filter(t => getAssigneeIds(t).includes(m.id))
-            const mp = memberTasks.filter(t => isTaskPendingForMember(t, m.id))
-            const mo = memberTasks.filter(t => isTaskOverdueForMember(t, m.id))
+            const mp = memberTasks.filter(t => isTaskPendingForMember(t, m.id, closures))
+            const mo = memberTasks.filter(t => isTaskOverdueForMember(t, m.id, closures))
             const total = memberTasks.length
             const pct = total ? Math.round(mp.length / total * 100) : 0
             return (
