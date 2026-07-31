@@ -18,6 +18,7 @@ export default function SchedulePage() {
   const [profile,  setProfile]  = useState<Profile | null>(null)
   const [tasks,    setTasks]    = useState<Task[]>([])
   const [members,  setMembers]  = useState<Profile[]>([])
+  const [closures, setClosures] = useState<any[]>([])
   const [popup,    setPopup]    = useState(false)
   const [loading,  setLoading]  = useState(true)
   const [calYear,  setCalYear]  = useState(new Date().getFullYear())
@@ -25,14 +26,16 @@ export default function SchedulePage() {
   const [freqFilter, setFreqFilter] = useState('all')
 
   const load = useCallback(async (uid: string) => {
-    const [{ data: p }, { data: t }, { data: m }] = await Promise.all([
+    const [{ data: p }, { data: t }, { data: m }, { data: cl }] = await Promise.all([
       supabase.from('profiles').select('*').eq('id', uid).single(),
       supabase.from('tasks').select('*, profiles!tasks_assigned_to_fkey(full_name)').order('created_at', { ascending: false }),
       supabase.from('profiles').select('*').order('full_name'),
+      supabase.from('task_closures').select('*'),
     ])
     if (p) setProfile(p)
     if (t) setTasks(t.map((x: any) => ({ ...x, assigned_to_name: x.profiles?.full_name })))
     if (m) setMembers(m)
+    if (cl) setClosures(cl)
   }, [])
 
   useEffect(() => {
@@ -204,7 +207,7 @@ export default function SchedulePage() {
         </div>
       </main>
 
-      <PendingPopup open={popup} onClose={() => setPopup(false)} tasks={tasks} members={members} />
+      <PendingPopup open={popup} onClose={() => setPopup(false)} tasks={tasks} members={members} closures={closures} />
     </div>
   )
 }
