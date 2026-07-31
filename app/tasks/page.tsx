@@ -7,6 +7,7 @@ import Sidebar from '@/components/Sidebar'
 import PendingPopup from '@/components/PendingPopup'
 import toast from 'react-hot-toast'
 import { Plus, RefreshCw, Trash2, X, Filter, Bell, Upload, Download, CheckCircle, RotateCcw, Calendar, Tag, Clock, AlignLeft, Flag, Users, UserPlus, Save, History } from 'lucide-react'
+import { periodKeyFor, getAssigneeIds as getAssigneeIdsShared } from '@/lib/taskStatus'
 
 const STATUS_ORDER: TaskStatus[] = ['pending','in-progress','review','done']
 const STATUS_COLOR: Record<string,string> = { pending:'bg-red-100 text-red-700', 'in-progress':'bg-blue-100 text-blue-700', review:'bg-amber-100 text-amber-700', done:'bg-green-100 text-green-700' }
@@ -205,33 +206,53 @@ export default function TasksPage() {
   }
 
   async function markDone(task: any) {
-    const isDone = task.status === 'done'
-    const next: TaskStatus = isDone ? 'in-progress' : 'done'
-    const updateData: any = { status: next }
-    if (!isDone) { updateData.closed_by = profile?.id; updateData.closed_at = new Date().toISOString() }
+    if (!profile) return
+    // Per-user, per-period closure is now the source of truth for ALL
+    // frequencies (not just daily) — see lib/taskStatus.ts for why.
+    const periodKey = periodKeyFor(task.frequency, new Date())
+    const isDoneForMe = !isTaskPendingForMemberLocal(task, profile.id)
+
+    if (!isDoneForMe) {
+      await supabase.from('task_closures').upsert({
+        task_id: task.id, user_id: profile.id,
+        closed_at: new Date().toISOString(), date: periodKey
+      }, { onConflict: 'task_id,user_id,date' })
+    } else {
+      await supabase.from('task_closures')
+        .delete().eq('task_id', task.id).eq('user_id', profile.id).eq('date', periodKey)
+    }
+
+    // Keep tasks.status/closed_by/closed_at in sync too, for display purposes
+    // (e.g. "Closed by X on Y" in the Closed tab) and so single-assignee
+    // tasks continue to work exactly as before. This is now a DERIVED field,
+    // not the source of truth: it reflects whether ALL current assignees
+    // have closed the task for the current period.
+    const assigneeIds = getAssigneeIdsShared(task)
+    const closuresAfter = isDoneForMe
+      ? closures.filter(c => !(c.task_id === task.id && c.user_id === profile.id && c.date === periodKey))
+      : [...closures, { task_id: task.id, user_id: profile.id, date: periodKey }]
+    const allAssigneesDone = assigneeIds.length > 0
+      ? assigneeIds.every(id => closuresAfter.some(c => c.task_id === task.id && c.user_id === id && c.date === periodKey))
+      : !isDoneForMe
+
+    const updateData: any = { status: allAssigneesDone ? 'done' : (task.status === 'done' ? 'in-progress' : task.status) }
+    if (allAssigneesDone) { updateData.closed_by = profile.id; updateData.closed_at = new Date().toISOString() }
     else { updateData.closed_by = null; updateData.closed_at = null }
     const { error } = await supabase.from('tasks').update(updateData).eq('id', task.id)
     if (error) { toast.error(error.message); return }
 
-    // For daily tasks: record per-user closure in task_closures table
-    if (task.frequency === 'daily' && profile) {
-      const today = new Date().toISOString().split('T')[0]
-      if (!isDone) {
-        // Insert closure record for this user
-        await supabase.from('task_closures').upsert({
-          task_id: task.id, user_id: profile.id,
-          closed_at: new Date().toISOString(), date: today
-        }, { onConflict: 'task_id,user_id,date' })
-      } else {
-        // Remove closure record (reopening)
-        await supabase.from('task_closures')
-          .delete().eq('task_id', task.id).eq('user_id', profile.id).eq('date', today)
-      }
-    }
-
-    toast.success(next === 'done' ? '✅ Task closed!' : '↩️ Reopened')
+    toast.success(!isDoneForMe ? '✅ Task closed!' : '↩️ Reopened')
     if (profile) load(profile.id)
-    if (viewTask?.id === task.id) setViewTask({ ...viewTask, status: next, ...updateData })
+    if (viewTask?.id === task.id) setViewTask({ ...viewTask, ...updateData })
+  }
+
+  // Local helper mirroring lib/taskStatus's isTaskPendingForMember, using
+  // this page's own `closures` state (kept in sync with task_closures).
+  function isTaskPendingForMemberLocal(task: any, memberId: string): boolean {
+    const ids = getAssigneeIdsShared(task)
+    if (!ids.includes(memberId)) return false
+    const key = periodKeyFor(task.frequency, new Date())
+    return !closures.some(c => c.user_id === memberId && c.task_id === task.id && c.date === key)
   }
 
   async function confirmRevoke() {
@@ -437,7 +458,7 @@ export default function TasksPage() {
               </div>
               <div className="px-6 py-4 border-t border-gray-100 flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex gap-2 flex-wrap">
-                  {canMarkDone(viewTask) && viewTask.status !== 'done' && <button onClick={() => markDone(viewTask)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-50 text-green-700 border border-green-200 text-xs font-medium hover:bg-green-100"><CheckCircle size={13}/> Mark done</button>}
+                  {canMarkDone(viewTask) && profile && isTaskPendingForMemberLocal(viewTask, profile.id) && <button onClick={() => markDone(viewTask)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-50 text-green-700 border border-green-200 text-xs font-medium hover:bg-green-100"><CheckCircle size={13}/> Mark done</button>}
                   {canEdit && viewTask.status === 'done' && <button onClick={() => { setRevokeId(viewTask.id); setViewTask(null) }} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-50 text-amber-700 border border-amber-200 text-xs font-medium hover:bg-amber-100"><RotateCcw size={13}/> Revoke</button>}
                   {canEdit && viewTask.status !== 'done' && <button onClick={() => cycleStatus(viewTask)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-200 text-xs font-medium hover:bg-indigo-100"><RefreshCw size={13}/> Next status</button>}
                 </div>
@@ -603,6 +624,9 @@ export default function TasksPage() {
                     : filtered.map(t => {
                         const assignees  = getAssigneeProfiles(t)
                         const isDone     = t.status === 'done'
+                        // Whether the CURRENT viewer specifically still has this task
+                        // pending (relevant for shared tasks with multiple assignees).
+                        const isDoneForViewer = profile ? !isTaskPendingForMemberLocal(t, profile.id) : isDone
                         const isSelected = selected.has(t.id)
                         const freqLabel  = frequencies.find(f=>f.key===t.frequency)?.label||t.frequency
                         const freqColor  = FREQ_COLOR_MAP[t.frequency]||'bg-purple-100 text-purple-700'
@@ -647,7 +671,7 @@ export default function TasksPage() {
                             )}
                             <td className="px-4 py-3" onClick={e=>e.stopPropagation()}>
                               <div className="flex gap-1">
-                                {canMarkDone(t)&&!isDone&&<button onClick={()=>markDone(t)} title="Mark done" className="p-1.5 rounded-lg text-gray-400 hover:bg-green-50 hover:text-green-600 transition-colors"><CheckCircle size={13}/></button>}
+                                {canMarkDone(t)&&!isDoneForViewer&&<button onClick={()=>markDone(t)} title="Mark done" className="p-1.5 rounded-lg text-gray-400 hover:bg-green-50 hover:text-green-600 transition-colors"><CheckCircle size={13}/></button>}
                                 {canEdit&&!isDone&&<button onClick={()=>cycleStatus(t)} title="Cycle status" className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-indigo-600 transition-colors"><RefreshCw size={13}/></button>}
                                 {canEdit&&isDone&&<button onClick={()=>setRevokeId(t.id)} title="Revoke" className="p-1.5 rounded-lg text-amber-400 hover:bg-amber-50 hover:text-amber-600 transition-colors"><RotateCcw size={13}/></button>}
                                 {isAdmin&&<button onClick={()=>deleteTask(t.id)} title="Delete" className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-600 transition-colors"><Trash2 size={13}/></button>}
