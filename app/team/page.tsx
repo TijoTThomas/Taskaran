@@ -17,6 +17,7 @@ export default function TeamPage() {
   const [profile,    setProfile]    = useState<Profile | null>(null)
   const [members,    setMembers]    = useState<Profile[]>([])
   const [tasks,      setTasks]      = useState<Task[]>([])
+  const [closures,   setClosures]   = useState<any[]>([])
   const [popup,      setPopup]      = useState(false)
   const [loading,    setLoading]    = useState(true)
   const [showForm,   setShowForm]   = useState(false)
@@ -28,14 +29,16 @@ export default function TeamPage() {
   const [resetting,  setResetting]  = useState(false)
 
   const load = useCallback(async (uid: string) => {
-    const [{ data: p }, { data: m }, { data: t }] = await Promise.all([
+    const [{ data: p }, { data: m }, { data: t }, { data: cl }] = await Promise.all([
       supabase.from('profiles').select('*').eq('id', uid).single(),
       supabase.from('profiles').select('*').order('full_name'),
       supabase.from('tasks').select('*').order('created_at', { ascending: false }),
+      supabase.from('task_closures').select('*'),
     ])
     if (p) setProfile(p)
     if (m) setMembers(m)
     if (t) setTasks(t)
+    if (cl) setClosures(cl)
   }, [])
 
   useEffect(() => {
@@ -385,7 +388,7 @@ export default function TeamPage() {
         </div>
       </main>
 
-      <PendingPopup open={popup} onClose={() => setPopup(false)} tasks={tasks} members={members}/>
+      <PendingPopup open={popup} onClose={() => setPopup(false)} tasks={tasks} members={members} closures={closures}/>
     </div>
   )
 }
