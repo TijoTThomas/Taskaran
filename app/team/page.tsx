@@ -54,17 +54,21 @@ export default function TeamPage() {
     if (form.password.length < 6) { toast.error('Password must be at least 6 characters'); return }
     setCreating(true)
     try {
-      const { data, error } = await supabase.auth.signUp({
-        email: form.email, password: form.password,
-        options: { data: { full_name: form.full_name, role: form.role } }
+      const { data: sessionData } = await supabase.auth.getSession()
+      const accessToken = sessionData.session?.access_token
+      if (!accessToken) throw new Error('Your session expired — please log in again')
+
+      const res = await fetch('/api/create-member', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({
+          full_name: form.full_name, email: form.email, password: form.password,
+          role: form.role, department: form.department,
+        }),
       })
-      if (error) throw error
-      if (data.user) {
-        await supabase.from('profiles').upsert({
-          id: data.user.id, email: form.email,
-          full_name: form.full_name, role: form.role, department: form.department,
-        })
-      }
+      const result = await res.json()
+      if (!res.ok) throw new Error(result.error || 'Failed to create member')
+
       toast.success(`Account created for ${form.full_name}!`)
       setForm(EMPTY_FORM); setShowForm(false)
       if (profile) load(profile.id)
@@ -77,19 +81,22 @@ export default function TeamPage() {
     if (!resetMember) return
     setResetting(true)
     try {
-      // Use Supabase admin to update user password
-      const { error } = await supabase.auth.admin.updateUserById(resetMember.id, {
-        password: newPassword
+      const { data: sessionData } = await supabase.auth.getSession()
+      const accessToken = sessionData.session?.access_token
+      if (!accessToken) throw new Error('Your session expired — please log in again')
+
+      const res = await fetch('/api/reset-member-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({ userId: resetMember.id, password: newPassword }),
       })
-      if (error) throw error
+      const result = await res.json()
+      if (!res.ok) throw new Error(result.error || 'Failed to reset password')
+
       toast.success(`Password updated for ${resetMember.full_name}!`)
       setResetMember(null); setNewPassword(''); setShowPwd(false)
     } catch (err: any) {
-      // Fallback: send password reset email
-      const { error: emailError } = await supabase.auth.resetPasswordForEmail(resetMember.email)
-      if (emailError) toast.error('Could not reset password: ' + emailError.message)
-      else toast.success(`Password reset email sent to ${resetMember.email}`)
-      setResetMember(null); setNewPassword(''); setShowPwd(false)
+      toast.error(err.message || 'Could not reset password')
     }
     setResetting(false)
   }
